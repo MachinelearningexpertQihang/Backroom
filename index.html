@@ -170,6 +170,7 @@
   <div class="tools-in">
     <button class="tbtn" id="soundBtn">🔇 环境音</button>
     <button class="tbtn" id="codexBtn">☰ 结局图鉴</button>
+    <button class="tbtn" id="showAllBtn">⚡ 立即显文</button>
     <button class="tbtn" id="restartBtn">↻ 重来</button>
     <span class="progress" id="prog"></span>
   </div>
@@ -385,6 +386,7 @@ function restart(){
 /* ---- 事件 ---- */
 document.getElementById("soundBtn").onclick=toggleSound;
 document.getElementById("codexBtn").onclick=openCodex;
+document.getElementById("showAllBtn").onclick=skipType;
 document.getElementById("restartBtn").onclick=restart;
 document.getElementById("closeBtn").onclick=closeCodex;
 document.getElementById("modal").onclick=e=>{ if(e.target.id==="modal") closeCodex(); };
