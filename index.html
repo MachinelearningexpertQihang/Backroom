@@ -154,15 +154,34 @@
     .tube,body.dim .tube,body.critical .tube{animation:none}
     .cursor{animation:none}
   }
+
+  /* ==== 下探版新增 ==== */
+  .depth{font-family:"Special Elite",monospace;font-size:12px;color:var(--paper-dim);white-space:nowrap}
+  .depth b{color:var(--lamp);font-size:14px}
+  .delta{position:fixed;left:50%;top:88px;transform:translateX(-50%);z-index:9;
+    font-family:"Special Elite",monospace;font-size:15px;letter-spacing:.5px;padding:7px 16px;border-radius:3px;
+    background:var(--wall);border:1px solid var(--line);opacity:0;transition:opacity .35s,top .7s;pointer-events:none}
+  .delta.show{opacity:1;top:76px}
+  .delta.up{color:#c3cf8a;border-color:var(--moss)}
+  .delta.down{color:#e0947e;border-color:var(--rust)}
+  .choice .cost{float:right;font-family:"Special Elite",monospace;font-size:11px;color:var(--lamp-dim);margin-left:8px}
+  .choice.locked .cost{color:var(--rust)}
+  .skiphint{margin:14px 0 2px;font-family:"Special Elite",monospace;font-size:12px;
+    color:var(--lamp-dim);letter-spacing:1px;cursor:pointer;opacity:.7;user-select:none;
+    transition:opacity .3s;display:none}
+  .skiphint:hover{opacity:1}
+  .skiphint.show{display:block}
 </style>
 </head>
 <body>
 <div class="grain"></div>
+<div class="delta" id="delta"></div>
 <div class="tube-wrap"><div class="tube" id="tube"></div></div>
 
 <div class="stage">
   <div class="hud" id="hud"></div>
   <div class="scene" id="scene"></div>
+  <div class="skiphint" id="skiphint">▸ 轻触正文，显示全文</div>
   <div class="choices" id="choices"></div>
 </div>
 
@@ -170,7 +189,6 @@
   <div class="tools-in">
     <button class="tbtn" id="soundBtn">🔇 环境音</button>
     <button class="tbtn" id="codexBtn">☰ 结局图鉴</button>
-    <button class="tbtn" id="showAllBtn">⚡ 立即显文</button>
     <button class="tbtn" id="restartBtn">↻ 重来</button>
     <span class="progress" id="prog"></span>
   </div>
@@ -187,667 +205,679 @@
 
 <script>
 /* =========================================================
-   后室文字冒险 · 引擎
+   后室 · 下探版引擎
+   道具真正生效：神智消耗/归零即结局，杏仁水回神智，
+   手电与神智门槛决定能否安全通过某些层。
    ========================================================= */
 const STORY = {};
 
 /* ---- 状态 ---- */
-const FRESH = () => ({ san:100, water:2, light:100, flags:{}, depth:0 });
+const FRESH = () => ({ san:100, water:2, light:100, depth:0, flags:{} });
 let S = FRESH();
+function clampS(){ S.san=Math.max(0,Math.min(100,S.san)); S.light=Math.max(0,Math.min(100,S.light)); S.water=Math.max(0,S.water); }
 
 /* ---- 存档（结局收集）---- */
-const SAVE_KEY = "backrooms_endings_v1";
+const SAVE_KEY = "backrooms_descend_v1";
 function loadUnlocked(){ try{ return JSON.parse(localStorage.getItem(SAVE_KEY))||[]; }catch(e){ return []; } }
-function unlock(code){
-  const u = loadUnlocked();
-  if(!u.includes(code)){ u.push(code); try{ localStorage.setItem(SAVE_KEY, JSON.stringify(u)); }catch(e){} }
+function unlock(code){ const u=loadUnlocked(); if(!u.includes(code)){ u.push(code); try{localStorage.setItem(SAVE_KEY,JSON.stringify(u));}catch(e){} } }
+
+/* ---- 状态涨落反馈（让道具"看得见"）---- */
+function showDelta(txt,dir){
+  const d=document.getElementById("delta");
+  d.textContent=txt; d.className="delta show "+(dir>0?"up":"down");
+  clearTimeout(d._t); d._t=setTimeout(()=>{ d.className="delta"; },1500);
+}
+function feedback(before){
+  const dSan=S.san-before.san, dW=S.water-before.water, dL=S.light-before.light;
+  if(dSan){ showDelta((dSan>0?"神智 +":"神智 ")+dSan, dSan); }
+  else if(dW){ showDelta((dW>0?"杏仁水 +":"杏仁水 ")+dW, dW); }
+  else if(dL){ showDelta((dL>0?"手电 +":"手电 ")+dL+"%", dL); }
 }
 
 /* ---- 打字机 ---- */
 let typing=false, typeTimer=null, fullText="", prefersReduced=false;
-try{ prefersReduced = matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){}
+try{ prefersReduced=matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){}
+function typeOut(text,done){
+  const el=document.getElementById("scene"); fullText=text;
+  const hint=document.getElementById("skiphint");
+  if(prefersReduced){ el.innerHTML=markup(text); typing=false; if(hint)hint.classList.remove("show"); done&&done(); return; }
+  typing=true; let i=0; el.innerHTML=""; clearInterval(typeTimer);
+  if(hint)hint.classList.add("show");
+  typeTimer=setInterval(()=>{
+    i++; el.innerHTML=markup(text.slice(0,i))+'<span class="cursor"></span>';
+    if(i>=text.length){ clearInterval(typeTimer); typing=false; if(hint)hint.classList.remove("show"); el.innerHTML=markup(text); done&&done(); }
+  },15);
+}
+function skipType(){ if(!typing)return; clearInterval(typeTimer); typing=false;
+  const hint=document.getElementById("skiphint"); if(hint)hint.classList.remove("show");
+  document.getElementById("scene").innerHTML=markup(fullText); renderChoicesNow(); }
+function markup(t){ return t
+  .replace(/【([^】]+)】/g,'<span class="flash">$1</span>')
+  .replace(/〔([^〕]+)〕/g,'<span class="amber">$1</span>')
+  .replace(/『([^』]+)』/g,'<span class="moss">$1</span>'); }
 
-function typeOut(text, done){
-  const el = document.getElementById("scene");
-  fullText = text;
-  if(prefersReduced){ el.innerHTML = markup(text); typing=false; done&&done(); return; }
-  typing=true; let i=0; el.innerHTML="";
-  const plain = text;
-  clearInterval(typeTimer);
-  typeTimer = setInterval(()=>{
-    i += 1;
-    el.innerHTML = markup(plain.slice(0,i)) + '<span class="cursor"></span>';
-    if(i>=plain.length){ clearInterval(typeTimer); typing=false; el.innerHTML=markup(plain); done&&done(); }
-  }, 16);
-}
-function skipType(){
-  if(!typing) return;
-  clearInterval(typeTimer); typing=false;
-  document.getElementById("scene").innerHTML = markup(fullText);
-  renderChoicesNow();
-}
-/* 轻量文本高亮：【危】→红, 〔黄〕→琥珀 */
-function markup(t){
-  return t
-    .replace(/【([^】]+)】/g,'<span class="flash">$1</span>')
-    .replace(/〔([^〕]+)〕/g,'<span class="amber">$1</span>')
-    .replace(/『([^』]+)』/g,'<span class="moss">$1</span>');
-}
-
-/* ---- 音效：荧光灯嗡鸣 ---- */
-let actx=null, humOsc=null, humGain=null, soundOn=false;
+/* ---- 荧光灯嗡鸣 ---- */
+let actx=null,humOsc=null,humGain=null,soundOn=false;
 function toggleSound(){
-  if(!actx){ try{ actx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return; } }
-  if(soundOn){ stopHum(); soundOn=false; }
-  else{ startHum(); soundOn=true; }
+  if(!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return; } }
+  if(soundOn){ try{humOsc.stop();humOsc._o2.stop();}catch(e){} soundOn=false; }
+  else{ if(actx.state==="suspended")actx.resume();
+    humOsc=actx.createOscillator(); const o2=actx.createOscillator(); humGain=actx.createGain();
+    humOsc.type="sawtooth"; humOsc.frequency.value=60; o2.type="sine"; o2.frequency.value=120;
+    humGain.gain.value=0.014; const lp=actx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=340;
+    humOsc.connect(lp);o2.connect(lp);lp.connect(humGain);humGain.connect(actx.destination);
+    humOsc.start();o2.start();humOsc._o2=o2; soundOn=true; }
   const b=document.getElementById("soundBtn");
-  b.classList.toggle("on",soundOn);
-  b.textContent = soundOn ? "🔊 环境音" : "🔇 环境音";
+  b.classList.toggle("on",soundOn); b.textContent=soundOn?"🔊 环境音":"🔇 环境音";
 }
-function startHum(){
-  if(actx.state==="suspended") actx.resume();
-  humOsc = actx.createOscillator();
-  const o2 = actx.createOscillator();
-  humGain = actx.createGain();
-  humOsc.type="sawtooth"; humOsc.frequency.value=60;
-  o2.type="sine"; o2.frequency.value=120;
-  humGain.gain.value=0.014;
-  const lp=actx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=340;
-  humOsc.connect(lp); o2.connect(lp); lp.connect(humGain); humGain.connect(actx.destination);
-  humOsc.start(); o2.start(); humOsc._o2=o2;
-}
-function stopHum(){ try{ humOsc.stop(); humOsc._o2.stop(); }catch(e){} }
 
 /* ---- 灯管随神智反应 ---- */
 function updateTube(){
-  document.body.classList.toggle("dim", S.san<=55);
-  document.body.classList.toggle("critical", S.san<=25);
+  document.body.classList.toggle("dim",S.san<=55);
+  document.body.classList.toggle("critical",S.san<=25);
 }
 
 /* ---- HUD ---- */
-function barColor(v,good,mid){ return v>60?good:(v>30?mid:"var(--rust)"); }
+function barColor(v,g,m){ return v>60?g:(v>30?m:"var(--rust)"); }
+function stat(label,v,color,warn){
+  return `<div class="stat${warn?' warn':''}"><b>${label}</b><span class="bar"><i style="width:${Math.max(0,Math.min(100,v))}%;background:${color}"></i></span></div>`;
+}
 function renderHUD(node){
   const h=document.getElementById("hud");
-  if(node.ending){ h.innerHTML=""; h.style.display="none"; return; }
+  if(node.ending){ h.style.display="none"; return; }
   h.style.display="flex";
+  const depTxt = (node.dep!==undefined)? `<span class="depth">深度 <b>-${node.dep}</b> 层</span>` : "";
   h.innerHTML =
     `<div class="loc"><span class="lv">${node.level||""}</span><span class="nm">${node.title||""}</span></div>`+
-    stat("神智",S.san,barColor(S.san,"var(--moss)","var(--lamp)"))+
-    `<div class="stat"><b>杏仁水</b><span style="color:var(--lamp);font-family:'Special Elite'">×${S.water}</span></div>`+
-    stat("手电",S.light,barColor(S.light,"var(--lamp)","var(--lamp-dim)"));
-}
-function stat(label,v,color){
-  return `<div class="stat"><b>${label}</b><span class="bar"><i style="width:${Math.max(0,Math.min(100,v))}%;background:${color}"></i></span></div>`;
+    depTxt+
+    stat("神智",S.san,barColor(S.san,"var(--moss)","var(--lamp)"),S.san<=25)+
+    `<div class="stat"><b>杏仁水</b><span style="color:${S.water>0?'var(--lamp)':'var(--rust)'};font-family:'Special Elite'">×${S.water}</span></div>`+
+    stat("手电",S.light,barColor(S.light,"var(--lamp)","var(--lamp-dim)"),S.light<=20);
 }
 
-/* ---- 渲染节点 ---- */
+/* ---- 渲染 ---- */
 let pendingNode=null;
 function go(key){
-  const node = STORY[key];
-  if(!node){ console.warn("missing node",key); return; }
+  const node=STORY[key];
+  if(!node){ console.warn("missing",key); return; }
+  const before={san:S.san,water:S.water,light:S.light};
   if(node.onEnter) node.onEnter(S);
-  S.san = Math.max(0, Math.min(100, S.san));
-  S.light = Math.max(0, Math.min(100, S.light));
-  S.depth++;
+  clampS();
+  if(node.dep!==undefined) S.depth=node.dep;
+  // 神智归零 → 精神消散（除非本身是结局）
+  if(!node.ending && S.san<=0){ feedback(before); setTimeout(()=>go("E_collapse"),300); updateTube(); return; }
+  feedback(before);
   updateTube();
   renderHUD(node);
   document.getElementById("choices").innerHTML="";
-  pendingNode = node;
-
-  const text = typeof node.text==="function"? node.text(S): node.text;
+  pendingNode=node;
+  const text=typeof node.text==="function"? node.text(S): node.text;
   if(node.ending){ unlock(node.code); refreshProgress(); }
-  typeOut(text, renderChoicesNow);
+  typeOut(text,renderChoicesNow);
 }
 function renderChoicesNow(){
-  const node = pendingNode; if(!node) return;
-  const box = document.getElementById("choices");
-  box.innerHTML="";
-
+  const node=pendingNode; if(!node) return;
+  const box=document.getElementById("choices"); box.innerHTML="";
   if(node.ending){
     document.getElementById("hud").style.display="none";
+    clearEndingDom();
     const tag=document.createElement("div");
     tag.className="ending-tag "+(node.tone==="good"?"t-good":node.tone==="bad"?"t-bad":"t-neutral");
-    tag.textContent = node.code+" · "+({good:"生还",neutral:"未定",bad:"消散"}[node.tone]||"结局");
+    tag.textContent=node.code+" · "+({good:"生还",neutral:"未定",bad:"消散"}[node.tone]||"结局");
     const title=document.createElement("div");
     title.className="ending-title"; title.textContent=node.name;
-    box.parentNode.insertBefore(tag, document.getElementById("scene"));
-    box.parentNode.insertBefore(title, document.getElementById("scene"));
-    // 清理旧的
-    [...box.parentNode.querySelectorAll(".ending-tag")].slice(0,-1).forEach(e=>e.remove());
-    [...box.parentNode.querySelectorAll(".ending-title")].slice(0,-1).forEach(e=>e.remove());
-
-    const foot=document.createElement("div");
-    foot.className="ending-foot";
-    const u=loadUnlocked().length, tot=totalEndings();
-    foot.textContent=`—— 你已发掘 ${u} / ${tot} 种结局 ——`;
+    const scene=document.getElementById("scene");
+    scene.parentNode.insertBefore(tag,scene);
+    scene.parentNode.insertBefore(title,scene);
+    const foot=document.createElement("div"); foot.className="ending-foot";
+    foot.textContent=`—— 你已发掘 ${loadUnlocked().length} / ${totalEndings()} 种结局 · 深度 -${S.depth} 层 ——`;
     box.appendChild(foot);
-    addChoice(box,"再入后室","__restart",true);
-    addChoice(box,"翻开结局图鉴","__codex",true);
+    addBtn(box,"再入后室",()=>restart());
+    addBtn(box,"翻开结局图鉴",()=>openCodex());
     return;
   }
   clearEndingDom();
   (node.choices||[]).filter(c=>!(c.hidden&&c.hidden(S))).forEach((c,idx)=>{
-    const locked = c.req && !c.req(S);
+    const locked=c.req&&!c.req(S);
     const b=document.createElement("button");
     b.className="choice"+(locked?" locked":"");
-    b.innerHTML=`<span class="k">${String.fromCharCode(65+idx)}</span>${c.t}`+
-      (locked&&c.note?`<span class="note">${c.note}</span>`:"");
+    let inner=`<span class="k">${String.fromCharCode(65+idx)}</span>${c.t}`;
+    if(c.cost) inner+=`<span class="cost">${c.cost}</span>`;
+    if(locked&&c.note) inner+=`<span class="note">${c.note}</span>`;
+    b.innerHTML=inner;
     if(!locked) b.onclick=()=>go(c.go);
     box.appendChild(b);
   });
 }
-function clearEndingDom(){
-  document.querySelectorAll(".ending-tag,.ending-title").forEach(e=>e.remove());
-}
-function addChoice(box,label,action,special){
-  const b=document.createElement("button");
-  b.className="choice"; b.innerHTML=`<span class="k">▸</span>${label}`;
-  b.onclick=()=>{ if(action==="__restart") restart(); else if(action==="__codex") openCodex(); };
-  box.appendChild(b);
-}
+function clearEndingDom(){ document.querySelectorAll(".ending-tag,.ending-title").forEach(e=>e.remove()); }
+function addBtn(box,label,fn){ const b=document.createElement("button");
+  b.className="choice"; b.innerHTML=`<span class="k">▸</span>${label}`; b.onclick=fn; box.appendChild(b); }
 
-/* ---- 结局统计 ---- */
-function allEndingCodes(){
-  return Object.values(STORY).filter(n=>n.ending).sort((a,b)=>a.code.localeCompare(b.code));
-}
-function totalEndings(){ return allEndingCodes().length; }
-function refreshProgress(){
-  document.getElementById("prog").textContent = `结局 ${loadUnlocked().length}/${totalEndings()}`;
-}
-
-/* ---- 图鉴 ---- */
+/* ---- 结局统计/图鉴 ---- */
+function allEndings(){ return Object.values(STORY).filter(n=>n.ending).sort((a,b)=>a.code.localeCompare(b.code)); }
+function totalEndings(){ return allEndings().length; }
+function refreshProgress(){ document.getElementById("prog").textContent=`结局 ${loadUnlocked().length}/${totalEndings()}`; }
 function openCodex(){
-  const u=loadUnlocked();
-  const list=allEndingCodes();
+  const u=loadUnlocked(), list=allEndings();
   document.getElementById("codexSub").textContent=`已发掘 ${u.length} / ${list.length} · 存档保存在本地浏览器`;
   const g=document.getElementById("egrid"); g.innerHTML="";
   list.forEach(n=>{
     const found=u.includes(n.code);
-    const row=document.createElement("div");
-    row.className="erow"+(found?"":" locked");
-    const rc = n.tone==="good"?"t-good":n.tone==="bad"?"t-bad":"t-neutral";
-    row.innerHTML=`<span class="code">${n.code}</span>`+
-      `<span class="ename">${found?n.name:"？？？ 未发现"}</span>`+
+    const row=document.createElement("div"); row.className="erow"+(found?"":" locked");
+    const rc=n.tone==="good"?"t-good":n.tone==="bad"?"t-bad":"t-neutral";
+    row.innerHTML=`<span class="code">${n.code}</span><span class="ename">${found?n.name:"？？？ 未发现"}</span>`+
       (found?`<span class="erar ${rc}">${({good:"生还",neutral:"未定",bad:"消散"}[n.tone])}</span>`:"");
     g.appendChild(row);
   });
   document.getElementById("modal").classList.add("show");
 }
 function closeCodex(){ document.getElementById("modal").classList.remove("show"); }
-
-/* ---- 重开 ---- */
-function restart(){
-  S=FRESH();
-  clearEndingDom();
-  document.getElementById("hud").style.display="flex";
-  go("title");
-}
+function restart(){ S=FRESH(); clearEndingDom(); document.getElementById("hud").style.display="flex"; go("title"); }
 
 /* ---- 事件 ---- */
 document.getElementById("soundBtn").onclick=toggleSound;
 document.getElementById("codexBtn").onclick=openCodex;
-document.getElementById("showAllBtn").onclick=skipType;
 document.getElementById("restartBtn").onclick=restart;
 document.getElementById("closeBtn").onclick=closeCodex;
 document.getElementById("modal").onclick=e=>{ if(e.target.id==="modal") closeCodex(); };
 document.getElementById("scene").onclick=skipType;
+document.getElementById("skiphint").onclick=skipType;
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape") closeCodex();
-  if((e.key===" "||e.key==="Enter") && typing){ e.preventDefault(); skipType(); }
+  if((e.key===" "||e.key==="Enter")&&typing){ e.preventDefault(); skipType(); }
 });
 
 /* =========================================================
-   故事数据 —— 分批注入（扩写版）
+   故事 · 第一批：开场 / Level 0 / Level 1
+   （下探线：每次向下都消耗神智与手电，越深越狠）
    ========================================================= */
 Object.assign(STORY, {
   title:{
-    level:"", title:"",
-    text:"晚上九点四十七分。写字楼第十四层，只剩你一个人。\n\n你盯着屏幕上那张永远对不平的报表，右眼皮跳了很久。头顶的日光灯管发出你早已听惯、几乎察觉不到的嗡鸣——一种低到骨头里的、六十赫兹的电流声。同事们两小时前就走光了，走廊尽头的感应灯早已熄灭，只剩你这一格隔间还亮着。\n\n你揉了揉发酸的眼睛，笔从指间滑落，骨碌碌滚到隔间的挡板下面。你叹了口气，弯下腰去够它。\n\n指尖将将触到笔杆的瞬间——脚下的地面「咔」地响了一声。\n\n不是木地板的吱呀，也不是椅子的滑动。是一种更深、更钝的声音，像整个世界在某个你看不见的接缝处，轻轻地、错开了一格。\n\n然后，地板不见了。\n\n没有坠落的失重，没有尖叫的时间。只是你伸手去够笔的这个姿势，被原封不动地搬到了别的地方。你【穿模】了——穿过了现实那层薄薄的、你从不知道它存在的墙纸。",
+    dep:0, level:"", title:"",
+    text:"晚上十一点，公司只剩下你一个人。\n\n你靠在隔间的挡板上，机械地核对着当月的第七版报表。天花板的日光灯管，发出那种听了一整天、早已充耳不闻的嗡鸣。桌上的咖啡凉透了，在杯壁上结出一圈褐色的痕。屏幕的冷光刺得你的眼睛又干又涩，那些数字在你眼前，渐渐地游动、模糊，失去了意义。\n\n你已经记不清这是本周第几个这样的深夜了。日子像一条望不到头的、灰色的走廊，你每天在里面重复着同样的通勤、同样的会议、同样的报表、同样的疲惫，然后回到家，倒头就睡，第二天，再来一遍。你有多久，没有真正地、为某件事情，心动过了？\n\n你伸了个懒腰，骨节发出一连串的脆响。指间一松，笔滑落下去，「嗒」地一声，骨碌碌地，滚到了隔间挡板的底下。\n\n你叹了口气，那叹息里，是连你自己都没察觉的、深不见底的疲惫。你俯下身，蹲下去，伸手到挡板底下，去够那支笔——\n\n指尖，刚刚触到冰凉的地板——\n\n脚下，忽然「咔」的一声轻响。\n\n那声音，像是某块拼图，被人从世界的背面，悄无声息地，抽走了。\n\n地板的触感，消失了。重力，也消失了。\n\n你【穿模】了。\n\n墙壁、隔间、显示器、整栋写字楼、窗外的城市灯火，连同你所熟悉的、抱怨过千百次却从未想过会失去的整个世界，一起，从你身边翻转、剥离、崩解，被一片无边无际的、令人作呕的昏黄，温柔而彻底地，吞没了。",
     choices:[
-      { t:"睁开眼，看看自己落在了哪里", go:"L0_arrive" },
-      { t:"⟡ 等等……这一切，你好像经历过", go:"E_awaken", hidden:s=>loadUnlocked().length<8 }
+      { t:"睁开眼，看看自己落在了哪里", go:"L0_enter" },
+      { t:"⟡ 等一下……这一幕，你好像经历过无数次", go:"E_awaken", hidden:s=>loadUnlocked().length<8 }
     ]
   },
 
-  L0_arrive:{
-    level:"LEVEL 0", title:"大厅",
+  /* ---------- Level 0 ---------- */
+  L0_enter:{
+    dep:0, level:"LEVEL 0", title:"大厅",
     onEnter:s=>{ s.san-=5; },
-    text:"你的脸颊贴在地毯上。\n\n第一个涌进感官的，是气味——一种潮湿的、发霉的、混着旧办公楼地毯几十年积攒下来的灰尘与水汽的味道，黏稠得几乎能尝到。第二个是声音：那阵嗡鸣还在，可它变了。不再是一根灯管的独奏，而是成千上万根荧光灯管汇成的、铺天盖地的合唱，从四面八方、从头顶、从远得看不见的地方涌来，像是这个世界唯一的、永不停歇的心跳。\n\n你撑起身子，抬起头。\n\n黄色。\n\n满眼都是黄色。泛黄的墙纸，一格一格，图案单调地重复；泛黄的地毯，湿漉漉地铺向每一个方向；泛黄的天花板，嵌满了忽明忽暗的〔荧光灯〕，把一切照得毫无阴影、也毫无生气。房间连着房间，没有一扇窗，没有一道门，只有敞开的门洞通向下一个一模一样的房间，走廊拐进走廊，尽头永远是又一个拐角。\n\n你站起来，走了几步，又走了几步，试图找到一面\"外墙\"。可你越走，越明白一个让胃部发凉的事实：这里没有外墙。这里，似乎是【无限】大的。\n\n就在这时，远处某个看不见的房间里，传来一阵缓慢的、沉重的拖拽声。\n\n像是有什么东西，正拖着不属于它的重量，一点一点，朝你这个方向挪来。\n\n你试着看一眼手机——屏幕亮着，时间却停在了你穿模的那一刻，一个跳动的秒表被冻结在半空。没有信号，没有网络，连那条你以为永远都在的、代表着与世界相连的小小信号图标，也彻底消失了。你忽然意识到，把你和\u201c家\u201d连在一起的每一根线，都在刚才那\u201c咔\u201d的一声里，被无声地剪断了。你独自一人，被丢进了这台无限循环的、发着黄光的复读机里。远处的拖拽声还在继续。你必须动起来。",
+    text:"你脸颊贴着潮湿的地毯醒来，一股浓重的、发了霉的水汽钻进鼻腔，像是某个常年不见天日的地下室。你咳嗽了两声，撑起发软的手臂——然后一阵眩晕攫住了你。\n\n泛黄的墙纸。泛黄的地毯。泛黄的天花板。一模一样的房间，一间连着一间，一间套着一间，向着所有你能看见的方向无限延伸，望不到任何一堵尽头的墙，望不到任何一扇门，或一扇窗。房间的比例是错的——天花板比正常的矮一些，走廊比正常的长一些，某些拐角的角度，会让你的眼睛隐隐作痛。\n\n头顶，密密麻麻的〔荧光灯管〕嵌在天花板里，发出永不停歇、也永不改变的嗡鸣。那声音起初只是背景，可当你意识到它「不会停」的那一刻，它便钻进了你的耳膜，闷在颅骨里，怎么也甩不掉——像是这个世界唯一的心跳。\n\n你踉跄着站起来，扶着墙。墙纸的触感是潮的，指腹按上去，会渗出一点湿意，像按在一块吸饱了水的海绵上。你抬手看了看自己：还穿着那件加班时的衬衫，口袋里还别着那支……不，那支笔早就掉了，掉在了另一个世界的隔间底下。你摸了摸口袋，只有一部黑屏的、再也搜不到任何信号的手机。\n\n你想起网上流传的那个都市传说：当一个人在现实里不小心「穿模」，剪辑失误一般跌出世界的接缝，就会掉进这个地方。人们叫它——『后室』。据说它无限大，据说这里的墙纸后面是更多的墙纸，据说很少、很少有人能回去。据说，落进来的人，如果不能尽快找到出口，就会被这里一点点「同化」，先是忘记时间，再是忘记方向，最后，忘记自己是谁。\n\n你一直以为那只是个吓唬人的、深夜论坛里的鬼故事。直到此刻，你的膝盖正跪在真实的、湿冷的、散发着霉味的黄色地毯上，指甲缝里还嵌着方才撑地时蹭到的、黄色墙漆的碎屑。\n\n你努力让自己冷静。你告诉自己：这不可能是真的。你只是加班太累了，趴在桌上睡着了，这是个梦，一个格外清晰的梦。你甚至掐了一下自己的手臂——很疼。真实得让你胃里一沉的、疼。\n\n远处，某个看不见的房间里，传来一阵缓慢的、拖拽着什么重物的声音。它停顿了一下，仿佛在辨认方向——然后，朝你这个方向，来了。",
     choices:[
-      { t:"循着地毯上的水渍走，湿气或许通向出口", go:"L0_wet" },
-      { t:"钉在原地，屏住呼吸判断声音的方向", go:"L0_still" },
-      { t:"对着空荡的房间，喊一声「有人吗」", go:"L0_shout" }
+      { t:"屏住呼吸，先判断那声音是什么", go:"L0_event" }
     ]
   },
-
-  L0_wet:{
-    level:"LEVEL 0", title:"大厅",
-    onEnter:s=>{ s.san-=3; },
-    text:"你决定不去理会那个声音。恐惧在催促你行动，而行动至少比呆立着等死要好。\n\n你低下头，仔细观察脚下的地毯。大部分地方只是均匀的潮湿，但你注意到，某些区域的水渍更深，颜色近乎发黑，它们连成一条断断续续的痕迹，像一条快要干涸的河流，蜿蜒着伸向房间的某个角落。潮湿意味着水，水会往低处流，往有缝隙的地方渗——而缝隙，意味着这个封闭世界的某种\"破绽\"。\n\n你顺着水渍走。它把你引过三个、四个、五个一模一样的房间，最后停在一处墙角。这里的墙纸不同——它微微向外鼓起，边缘发黑、翘起，像是被身后长期的潮气泡烂了。\n\n你伸出手，指尖按上去。\n\n墙纸后面是空的。不是水泥，不是砖，是【空的】。\n\n你屏住呼吸，用力一撕。潮湿的墙纸整片剥落，露出后面一道狭窄的、仅容一人侧身通过的裂缝。缝里透出的空气是干燥的、冷的，和这里黏稠的暖湿截然不同。\n\n身后，那阵拖拽声，似乎近了一些。你没有再犹豫，侧身挤了进去。",
+  L0_event:{
+    dep:0, level:"LEVEL 0", title:"大厅",
+    text:"你僵在原地，把呼吸压到最低，侧耳去听。\n\n拖拽声一下、一下，不紧不慢，绕过一道看不见的墙，出现在了相邻的房间。你透过没有门板的门框，终于看清了它——\n\n那是一个灰白色的人形。它有胳膊，有腿，有脑袋，个头和普通成年人相差无几，动作却僵硬得像一具被劣质丝线操纵的提线木偶。它拖着一条腿，一步，一顿，缓慢地挪动，每一步都在地毯上留下一道浅浅的、很快又弹回原状的压痕。\n\n当它的「脸」转向你这一侧时，你的血液在那一瞬间彻底冻住了。\n\n那张脸上，【什么都没有】。没有眼睛，没有鼻子，没有嘴，没有一丝一毫的起伏。只有一整片平滑的、像是被一块巨大的橡皮反复擦拭过的皮肤，在荧光灯下泛着死人般的青白。这就是后室里最常见、也最令人心底发毛的居民——『无脸人（Faceling）』。\n\n它似乎「察觉」到了什么，那张空白的脸对准了你藏身的方向，停顿了很久很久。你能听见自己的心跳撞击着肋骨，冷汗顺着后颈一滴滴滑进衣领。你不知道一个没有眼睛的东西是怎么「看」的，你只知道，此刻你绝不能动，绝不能出声。\n\n时间被拉得无限长。终于，它像是失去了兴趣，又像是从一开始就没真正注意到你，缓缓转过身，继续拖着那条腿，消失在房间的另一头。拖拽声渐渐远去，可你僵硬的双腿，过了好久才敢重新迈动。",
     choices:[
-      { t:"钻过裂缝，进入另一侧的空间", go:"L1_arrive" }
+      { t:"朝它离开的反方向走，尽快远离", go:"L0_fork" },
+      { t:"悄悄跟上它——它走得那么笃定，也许认得路", go:"L0_follow" }
     ]
   },
-
-  L0_still:{
-    level:"LEVEL 0", title:"大厅",
-    onEnter:s=>{ s.san-=12; },
-    text:"某种动物般的本能告诉你：不要动。\n\n你僵在原地，连呼吸都放到最轻，最缓。心脏却不听话，在胸腔里擂得震天响，你几乎担心那声音会把它引来。\n\n拖拽声越来越近。三个房间，两个房间，一个房间——然后，它出现在门洞里。\n\n那是一团模糊的、灰白色的人形。它有和人一样的四肢，一样的躯干，一样的脑袋，比例都对，姿态也对——它就那样直立着，微微佝偻，双臂垂在身侧。可它的脸……\n\n它没有脸。\n\n不是被遮住了，不是模糊了，而是那张脸本该在的地方，是一片平滑的、没有任何起伏的灰白，像一尊被人用拇指抹去了所有五官的黏土像。这是『无脸人（Faceling）』——后室里最常见，也最令人心里发毛的存在之一。\n\n它\"转向\"了你。没有眼睛，你却清清楚楚地感觉到，它那片空白的\"脸\"正对准了你的方向。空气凝固了。时间被拉得又细又长。你不知道它是在\"看\"你，还是根本没有察觉到你的存在——关于无脸人，探险者们至今争论不休：有人说它们无害，有人说它们只是还没决定要不要害你。\n\n漫长得像一个世纪之后，它缓缓地、毫无征兆地转过身，拖着那双沉重的脚，朝来时的方向走去，一步，一步，消失在另一个门洞里。\n\n你这才发现，自己的后背已经被冷汗浸透了。",
-    choices:[
-      { t:"朝它离开的反方向快步走，远离危险", go:"L0_wet" },
-      { t:"鬼使神差地跟上它——它似乎知道该去哪", go:"faceling_follow" }
-    ]
-  },
-
-  L0_shout:{
-    level:"LEVEL 0", title:"大厅",
-    onEnter:s=>{ s.san-=20; },
-    text:"「有人吗——」\n\n话一出口你就后悔了。\n\n你的声音在无尽的房间里荡开，撞上一面墙，弹向另一面，一层一层地叠加、回旋、扭曲。起初还听得出是你自己的嗓音，可回声一遍遍返回，音色渐渐变了质——它开始变得黏腻、拖沓，尾音被拉长，像是有什么东西在模仿你，学得越来越像，又越来越不像。\n\n然后，最后一声回响里，混进了一串你绝对没有发出的声音。\n\n一串窃笑。\n\n黑暗的走廊深处——不知何时，那里的荧光灯已经暗了下去——浮现出一排东西。洁白的、整齐的、湿润的【牙齿】。没有嘴唇，没有脸，没有身体，只有那一排牙，悬在黑暗里，咧开成一个巨大的、纯粹恶意的笑。\n\n『笑魇（Smiler）』。\n\n关于它，探险者手册上只写了一句话：如果你在黑暗中看见一个微笑，不要回以微笑，不要注视，不要让它知道你看见了它。\n\n头顶的荧光灯，开始一盏、一盏地熄灭。啪。啪。啪。黑暗像涨潮的水，从走廊那头朝你漫过来，那排牙齿在越来越浓的黑里，显得越来越亮。",
-    choices:[
-      { t:"立刻关掉手机屏幕，让自己彻底沉入黑暗", go:"smiler_dark" },
-      { t:"举起手机的光，直直照向那排牙齿", go:"E_smiler" }
-    ]
-  },
-
-  faceling_follow:{
-    level:"LEVEL 0", title:"大厅",
+  L0_follow:{
+    dep:0, level:"LEVEL 0", title:"大厅",
     onEnter:s=>{ s.san-=6; },
-    text:"一个荒唐的念头攫住了你：它从哪来，就该有\"从哪来\"的路。在这个没有方向、没有地标的地方，一个知道自己要去哪的存在，本身就是一种指引。\n\n你悄悄跟了上去，和它保持着三四个房间的距离。\n\n无脸人走得不快，脚步沉重而均匀，可它从不迟疑，从不在岔路口停顿。它穿过一间又一间毫无差别的黄房间，每一次转弯都干脆利落，仿佛它的脑中有一张你永远看不见的地图。你跟着它走了很久，久到你开始怀疑，在后室里\"时间\"这个概念是否还成立——你的手表停了，你的饥饿感和疲惫感都变得模糊而不真实。\n\n终于，无脸人在一面墙前停了下来。\n\n那面墙和其他所有墙没有任何区别，同样的黄墙纸，同样的重复花纹。可无脸人抬起脚,径直朝它走去——然后【走了进去】。墙面像水一样在它接触的瞬间荡开一圈涟漪，把它温柔地吞没，随即又恢复平整,仿佛什么都没发生过。\n\n你走到墙前，伸出手。指尖触到墙纸的刹那，传来的不是硬邦邦的墙壁，而是一种冰凉的、黏软的、像是把手伸进一桶隔夜果冻的触感。你的整只手，就那样陷了进去。",
+    text:"鬼使神差地，你放轻脚步，远远地缀在那个无脸人身后。\n\n你说不清自己为什么要跟上去。也许是因为它走得那样笃定——在这个连方向都是骗局的地方，任何一种「确定」都显得那么珍贵，哪怕它来自一个没有脸的东西。也许只是因为，独自站在无限延伸的黄色房间里，那种被整个宇宙遗忘的孤独，比跟着一个怪物走，更让人无法忍受。\n\n它穿过一间又一间毫无差别的房间，从不回头，也从不迟疑，仿佛脑中装着一张你永远看不见的地图。你努力在心里记路——左，右，直走，再右——可这里的房间实在太像了，同样的霉斑长在同样的墙角，同样的灯管在同样的位置明灭。转过三个弯，你就彻底、干净地失去了方向感，连来时的路都成了一个笑话。\n\n最终，它在一面看上去与其他任何一面都毫无二致的墙前停了下来。它抬起僵硬的手臂，然后——【径直走了进去】。它的身体像沉入水面一样，被那面墙无声地、温柔地吞没，消失不见，只在泛黄的墙纸上留下一圈缓缓合拢、又迅速抚平的涟漪，仿佛什么都不曾发生。\n\n你怔怔地走近那面墙，迟疑着伸出手。指尖触到墙纸的刹那，一股冰凉、黏软、说不出的诡异触感传来——那不是墙该有的质感，倒像是某种半凝固的、活着的东西。你的整只手，就那样陷了进去，不受阻拦。\n\n墙的另一头，隐约漏出一点扭曲的、彩色的光。还有……音乐？某种严重失真的、欢快得近乎癫狂的旋律，混着无数个走了调的、尖利的笑声，正从墙的深处，一阵一阵地渗出来。",
     choices:[
-      { t:"闭上眼，让整个人跟着走进墙里", go:"LFUN_arrive" },
-      { t:"猛地把手缩回来，独自另寻出路", go:"L1_arrive" }
+      { t:"缩回手，还是别乱闯，另寻出路", go:"L0_fork" },
+      { t:"深吸一口气，整个人走进墙里", go:"LFUN_enter" }
     ]
   },
-
-  smiler_dark:{
-    level:"LEVEL 0", title:"大厅",
+  L0_fork:{
+    dep:0, level:"LEVEL 0", title:"大厅",
+    text:s=>"你独自站在无尽的房间里，强迫自己冷静下来，盘算下一步。\n\n后室没有地图，但探险者们留下过一条铁律：这里的空间是「向下」的——你越往深处走，就离现实越远，也……据说，某些真正的出口，恰恰藏在更深的地方。\n\n此刻你面前有几个方向。"+(s.san<40?"\n\n你的太阳穴突突直跳，恐惧像潮水一样往上涌。你注意到墙角有一处地毯被水泡得发黑、微微鼓起，那底下似乎是空的——一个往下坠的诱惑。":""),
+    choices:[
+      { t:"搜一搜这几间房，也许有前人留下的东西", go:"L0_search", hidden:s=>s.flags.l0searched },
+      { t:"撕开发黑的墙角，往下一层走", go:"L1_enter", cost:"↓ 下探" },
+      { t:"在墙上找找那个传说中的『无剪辑点』", go:"L0_noclip" }
+    ]
+  },
+  L0_search:{
+    dep:0, level:"LEVEL 0", title:"大厅",
+    onEnter:s=>{ s.flags.l0searched=true; s.water+=1; s.san+=6; },
+    text:"你耐着性子，一间一间地翻找起来。\n\n大多数房间空空如也，只有霉味、嗡鸣，和那种无处不在的、令人牙酸的黄。你翻开一个又一个空抽屉，敲开一面又一面听起来是空心的墙，希望像一根被反复拉扯的橡皮筋，一点点地失去弹性。\n\n但翻找是值得的。在第五间房的墙角，你发现了一具早已风干的背包，帆布已经脆得一碰就掉渣，它的主人不知去了哪里——是回家了，还是变成了这里的某样东西，无从得知。你屏住呼吸，拉开了它的拉链。\n\n里面，静静躺着一瓶还没开封的〔杏仁水〕。琥珀色的液体在昏黄的灯下轻轻晃动，折射出一点温暖的光，是你落进这里以来，见过的第一样「美好」的东西。杏仁水是后室里最珍贵的补给，据说喝下它，能安定神智、驱散那种正在一点点侵蚀你的、说不清道不明的疯狂——能让你在这个拼命想抹掉你的世界里，牢牢记住「自己是谁」。你像捧着圣物一样，小心翼翼地把它收进怀里。\n\n背包的夹层里，还塞着半张被水泡得发皱的字条，上面是一行潦草而颤抖的字迹，像是在极度恐惧中写下的：\n\n『别在下面跑。它们听声音。灯，一定要省着用——到了没有光的地方，你才会明白，一节电池，就是一条命。』\n\n字条的背面，还有被反复描粗的三个字：『别回头。』",
+    choices:[
+      { t:"撕开发黑的墙角，往下一层走", go:"L1_enter", cost:"↓ 下探" },
+      { t:"去找找那个『无剪辑点』", go:"L0_noclip" }
+    ]
+  },
+  L0_noclip:{
+    dep:0, level:"LEVEL 0", title:"大厅",
     onEnter:s=>{ s.san-=10; },
-    text:"手册上那句话在你脑中炸开：不要让它知道你看见了它。\n\n你迅速摁灭手机屏幕，闭上眼，把自己彻底交给正在涌来的黑暗。\n\n你曾以为黑暗是恐惧的来源，可此刻，黑暗成了你唯一的庇护。『笑魇』依赖光而显形——它那排牙齿之所以能被你看见，是因为它需要\"被看见\"，需要有光把它的存在勾勒出来。没有光，那个笑就失去了着落，成了悬在虚空里的、无处安放的恶意。\n\n你听见它在近处游移。那串窃笑一会儿在左，一会儿在右，一会儿又贴到你耳边，近得你能感觉到一股冰冷的、腐败的气流拂过脸颊。它在找你。它知道你就在附近，却无法确定你的位置——只要你不睁眼，不发光，不发出声音让它锁定。\n\n你在黑暗里一动不动，站了很久，久到腿开始发麻，久到那串笑声终于渐渐远去、消散。\n\n你这才敢摸索着往前挪。你张开双臂，深一脚浅一脚地在纯粹的黑暗中前行，肩膀撞上了一堵墙——可这堵墙，是软的。松塌塌的，像一大团吸饱了水的海绵。你没有停下，反而失去平衡，整个人向前【栽了进去】，穿过那堵软墙，跌向墙后未知的空间。",
+    text:"你想起了传说中的〔无剪辑点（no-clip）〕。\n\n据说，后室的某些角落，现实世界的「接缝」并没有对齐，留下了一些薄弱的、可以穿透的点。运气好的话，一头撞进去，就能像当初掉进来时一样，直接「穿模」回家。这是最快、也最不需要深入地狱的回家方式——如果你能找到的话。\n\n你开始在一面又一面墙上，仔细地摸索、拍打、按压，寻找任何一丝异样的触感，任何一处空气的扭曲。你把耳朵贴在墙上，听那空洞的回响里，有没有一丝不同。时间一分一秒地流逝，头顶的嗡鸣声钻得你太阳穴突突直跳，希望，像一根被反复拉扯的橡皮筋，一点一点地，被磨薄、磨脆。\n\n你不知道自己找了多久。也许是几个小时，也许，在这个时间本就模糊的地方，只是几分钟。\n\ 就在你几乎要绝望地放弃时——\n\n某一处的空气，【微微地扭曲】了起来。\n\n像一颗石子投入平静的水面，那扭曲以肉眼可见的方式，一圈，一圈地，荡漾开来，折射着周围昏黄的光，形成一片朦胧的、不真实的光晕。\n\n就是它。这就是无剪辑点。\n\n你的心跳骤然加速。可就在你要冲过去的瞬间，你又想起了那个说法的、令人胆寒的另一半：这种现实的接缝，同样可能，通向的不是家，而是【虚空】——一片连「无」都称不上的、绝对的空无。跨过去的人，会在一瞬间，被那片虚空，碾成一缕连灰烬都算不上的青烟，永远地，从存在里被抹去。\n\n是回家的门，还是通往湮灭的口？没有人能分辨。你只有一次机会。\n\n要赌吗？",
     choices:[
-      { t:"睁开眼，看看自己落到了哪一层", go:"L6_arrive" }
-    ]
-  },
-});
-
-/* ===== Level 1 仓库 / Level 8 洞穴 ===== */
-Object.assign(STORY, {
-  L1_arrive:{
-    level:"LEVEL 1", title:"废弃仓库",
-    onEnter:s=>{ s.san+=5; },
-    text:"裂缝的另一边，是一个完全不同的世界。\n\n黄色消失了。取而代之的是一片阴冷、空旷的水泥空间。灰色的地面，灰色的墙，高得望不到顶的金属货架层层排列，架子上堆满了落满灰尘的木箱、卷成一团的电缆、锈蚀的机械零件。头顶零星地吊着几盏工业照明灯，它们不再是那种连绵的嗡鸣，而是各自为政地忽明忽暗，投下大片摇曳的阴影。\n\n这里是 LEVEL 1，探险者口中相对安全的\"缓冲区\"。空气终于干燥了，那股钻进骨头缝的霉味淡了许多，取而代之的是水泥和铁锈的冷硬气息。据说这一层的实体极为稀少——偶尔有落单的无脸人游荡，但成群的猎手很少光顾。\n\n你靠着一排货架滑坐下来，第一次有了喘息的空间。也第一次，你被迫直面那个一直不敢细想的问题：\n\n你到底，该怎么回家？\n\n现实那层\"墙纸\"是从哪一面破的？你甚至不记得穿模时脚下的方位。你所知道的关于\"后室\"的一切，都来自那些你曾嗤之以鼻的网络怪谈——而现在，它成了你唯一的生存手册。你逼自己冷静下来，回忆那些帖子里反复提到的东西：补给、记号、还有一个叫 M.E.G. 的组织。\n\n你站起身。坐着等不来出口。\n\n你靠在冰冷的水泥柱上，第一次认真地打量起\u201c自己\u201d。西装外套的肘部蹭上了 Level 0 的霉斑，皮鞋灌进了水，工牌还挂在胸前——上面印着你的名字、你的部门、你的照片，此刻却像一张来自另一个世界的、可笑的通行证。就在几个小时前，你还在为一份对不平的报表烦恼，为周五的会议焦虑，为要不要点第二杯咖啡而犹豫。那些烦恼此刻显得如此奢侈，如此珍贵。你多想回到那个会为这种小事发愁的、平庸而安全的自己。\u300c我一定要回去。\u300d你在心里，一字一句地对自己说。",
-    choices:[
-      { t:"翻找货架上的木箱，也许有补给", go:"L1_boxes" },
-      { t:"沿着货架之间的长通道，径直往前走", go:"L1_corridor" },
-      { t:"在墙上搜寻前人留下的记号", go:"L1_marks" }
-    ]
-  },
-
-  L1_boxes:{
-    level:"LEVEL 1", title:"废弃仓库",
-    onEnter:s=>{ s.water+=2; s.san+=8; s.flags.boxed=true; },
-    text:"你开始一只一只地撬开木箱。\n\n大多数箱子里是无用的东西：受潮结块的文件、锈死到掰不开的零件、早已风化的橡胶管。你的希望一点点消磨下去——直到第七、还是第八只箱子。\n\n掀开顶盖的瞬间，一股淡淡的、坚果般的香气飘了出来。箱子里，整整齐齐地码着几瓶琥珀色的液体，瓶身上没有任何标签,液体在昏暗的光线里泛着温润的光。\n\n〔杏仁水（Almond Water）〕。\n\n你几乎要笑出声来。这是后室里流传最广、也最玄妙的补给品。传说它不只是解渴——它能安定神智，抚平那种\"自己正在这个错误的世界里慢慢消融\"的恐慌，甚至，据一些老探险者说，它能\"稳固你在这里存在的事实\"，让你不至于像某些失踪者那样，渐渐变得透明、模糊，最后彻底成为后室的一部分。真假无从考证，但此刻，握着这两瓶冰凉的液体，你心里那根紧绷的弦，确实松了一分。\n\n你把它们小心地塞进背包。就在这时，你注意到箱子最底下压着一张纸。\n\n那是一张手绘的地图，线条粗糙却认真，标注着几条通道的走向，其中一条被反复描粗的路径，尽头画着一个方框，方框里写着三个字母：『M.E.G.』——旁边还有一行小字：「β-7 前哨站，有活人，别开枪」。",
-    choices:[
-      { t:"照着地图，前往 M.E.G. 前哨站", go:"MEG_arrive" },
-      { t:"不信任陌生人，还是自己走通道", go:"L1_corridor" }
-    ]
-  },
-
-  L1_marks:{
-    level:"LEVEL 1", title:"废弃仓库",
-    onEnter:s=>{ s.san+=4; },
-    text:"如果这里来过人，人就会留下痕迹。你举起手电，开始一寸寸地检查墙壁。\n\n很快，你的猜想得到了证实。在一根承重柱的背面，藏着一整片用炭笔、口红、甚至疑似血迹写下的字迹，深浅不一，字体各异，显然出自许多个不同的、绝望的人之手。这是后室里的\"留言板\"——前人拿命换来的经验，留给后来者的遗产。\n\n你逐条读下去，手指抚过那些歪斜的字：\n\n『別在 Level 2 跑动。它们看不见，但它们听得见。走，别跑。』\n\n『Level 4 有水有食物，是个好地方。但记住：三台打印机，不是四台。永远不要碰第四台。』\n\n『如果你在不该有窗的地方看见一扇窗——别靠近，别往里看，尤其别敲它。』\n\n『杏仁水省着喝。神智比命更值钱。人不是死在这里的，是“化”在这里的。』\n\n最后一行字迹被水泡得几乎无法辨认，你凑得极近，才勉强拼出开头几个字：「……真正的回家门，不在……」——后面的，永远地糊掉了。\n\n你盯着那行残缺的字看了很久，把它连同其他警告，一起刻进了记忆里。\n\n就在你转身时，手电扫过地面，光柱里映出脚下一块微微翘起的金属井盖，边缘还残留着被人撬动过的痕迹。",
-    choices:[
-      { t:"记下这些警告，走向通道尽头", go:"L1_corridor" },
-      { t:"撬开那块松动的井盖，往下看看", go:"L8_arrive" },
-      { t:"回头去翻木箱找补给", go:"L1_boxes", req:s=>!s.flags.boxed, note:"（这里的箱子已经搜过了）" }
-    ]
-  },
-
-  L1_corridor:{
-    level:"LEVEL 1", title:"废弃仓库",
-    onEnter:s=>{ s.san-=4; },
-    text:"你选定了货架之间最长的那条通道，径直走下去。\n\n通道比你想的要长得多。两侧的货架像沉默的巨人夹道而立，头顶的吊灯一盏比一盏昏暗，你的脚步声在空旷里被放大，一声声敲在寂静上。走了很久，前方终于出现了变化——通道的尽头，是一段向下的铁制楼梯，锈迹斑斑，扶手一碰就簌簌掉渣。\n\n你还没走近，一股湿热的蒸汽便顺着楼梯口翻涌上来，扑在脸上，瞬间糊住了视线。空气骤然变得闷热、潮湿，带着金属被烤热的焦味。\n\n你扶着扶手，一级一级往下走。楼梯尽头的景象，让你倒吸一口凉气：\n\n无数根管道，粗的细的，在昏暗中纵横交错、层层盘绕，塞满了整个空间，几乎没有立锥之地。有的管道在嘶嘶地漏着白色的蒸汽，有的表面凝着冰冷的水珠。这里是 LEVEL 2——探险者称之为〔管道梦（Pipe Dreams）〕的地方。闷热得像一座永不停工的地狱锅炉房。\n\n就在你犹豫要不要下去时，你听见了。\n\n金属爪尖刮擦地面的声音。「嗒、嗒、嗒」，不止一个，是一群，正从管道深处、从看不见的角落，由远及近地传来。你想起墙上的警告——『它们看不见，但它们听得见』。\n\n是『猎犬（Hounds）』。后室里最凶残的群体猎手，双目退化，全凭【听觉】在黑暗中锁定猎物。而你，正站在楼梯上，进退两难。",
-    choices:[
-      { t:"脱下鞋子，赤脚无声地潜行", go:"L2_sneak" },
-      { t:"拧开一根管道制造蒸汽掩护，然后冲刺", go:"L2_steam" },
-      { t:"先喝一口杏仁水，压住恐慌再做决定", go:"L2_drink", req:s=>s.water>0, note:"（你没有杏仁水了）" }
-    ]
-  },
-
-  L8_arrive:{
-    level:"LEVEL 8", title:"洞穴系统",
-    onEnter:s=>{ s.san-=12; s.light-=15; },
-    text:"你蹲下身，双手抠住井盖的边缘，用尽全身力气。铁盖发出一声刺耳的摩擦，缓缓移开，露出一个黑洞洞的、向下延伸的方口。一股阴冷的、带着泥土和积水腥气的风，从洞口幽幽地吹了上来。\n\n洞口下是一道石阶。你打开手电，深吸一口气，一级一级往下走。\n\n水泥墙很快消失了，取而代之的是粗粝、湿滑的天然岩壁。你走进了 LEVEL 8：一片仿佛没有尽头的地下洞穴系统。手电的光柱在幽深的空间里显得那么单薄，钟乳石从头顶垂下，尖端不断有水珠滴落，「嗒……嗒……」地砸在岩石上，回声在洞窟里荡开老远。空气冷得能呵出白气，湿度大得几乎能拧出水来。\n\n奇怪的是，岩壁上有人为凿刻的痕迹——一个又一个箭头，深深地刻进石头里，全都指向洞穴更深的方向。是前人留下的路标，还是……某种引诱？你无从判断。\n\n你顺着箭头走了一段，正当心里稍安时，前方的黑暗深处，突然传来了一阵声音。\n\n那是【无数细小的爪子刨挖岩石】的声音，密密麻麻，此起彼伏，汇成一片令人头皮发麻的沙沙声，像一场永远不会停的暴雨。你的手电颤抖着扫过去，光柱尽头，是一整面墙壁——那墙壁在\"蠕动\"。\n\n成千上万只『死亡鼠（Death Rats）』，红着眼睛，密密麻麻地覆盖了岩壁、洞顶和整条通道。你闯进了它们的巢穴。它们还没有大规模地注意到你，但你知道，这只是时间问题。",
-    choices:[
-      { t:"压住恐惧，沿箭头径直往洞穴深处闯", go:"E_delver" },
-      { t:"轻手轻脚转身，冲回井口逃命", go:"E_ratswarm" },
-      { t:"熄灭手电屏住呼吸，等鼠群自己散去", go:"E_cavein" }
-    ]
-  },
-});
-
-/* ===== Level 2 管道梦 / M.E.G. / Level 3 电气隧道 ===== */
-Object.assign(STORY, {
-  L2_drink:{
-    level:"LEVEL 2", title:"管道梦",
-    onEnter:s=>{ s.water--; s.san+=15; },
-    text:"在做任何决定之前，你需要让自己的手不再发抖。\n\n你拧开一瓶杏仁水的盖子，仰头灌下一大口。\n\n液体冰凉，带着一丝若有若无的、微苦的杏仁香。它滑过喉咙的瞬间，一种奇异的平静从胃里升起，沿着血管扩散到四肢百骸。恐惧像退潮的海水，缓缓褪去，露出底下清醒而坚硬的礁石。你的呼吸慢了下来，心跳也不再失控，那种\"世界正在坍缩、自己快要撑不住\"的窒息感消失了。\n\n传说是真的——杏仁水安定的不只是神经，还有你对\"自己是谁、自己在哪\"的确信。\n\n就在这份来之不易的清明里，你注意到了一件之前吓得根本没看清的事：这些管道，分成两种。一种表面凝着水珠、摸上去冰凉，是冷水管；另一种滚烫，还嘶嘶地漏着蒸汽，是热管。而『猎犬』的巡逻路线——你屏息观察着它们在管道迷宫里穿行的轨迹——竟然总是绕着热管走，紧贴冷水管的那些狭窄缝隙，它们从不涉足。\n\n它们怕烫。这是它们的软肋，也是你的活路。\n\n你把这条规律牢牢记住。只要贴着冷水管走，就能避开它们的獠牙。冷静，此刻比任何武器都管用。",
-    choices:[
-      { t:"贴着冷水管，一寸一寸地潜行过去", go:"L2_sneak" },
-      { t:"时间不等人，趁清醒直接冲过去", go:"L2_steam" }
-    ]
-  },
-
-  L2_sneak:{
-    level:"LEVEL 2", title:"管道梦",
-    onEnter:s=>{ s.san-=6; },
-    text:"你想起墙上那行血写的警告：走，别跑。\n\n你弯下腰，一只手撑着膝盖，另一只手解开鞋带，把鞋子脱下来拎在手里。赤脚踩在温热、潮湿的金属地面上，凉意和黏腻同时从脚底传来，但你的脚步，从此没有了一丝声响。\n\n然后，你开始了这辈子最漫长的一段路。\n\n你几乎是贴着地面移动的，每一步都先用脚尖轻轻试探,确认落点没有积水、没有会发出声响的碎屑，才把重心缓缓移过去。冷水管冰凉的水珠一次次滴在你的后颈上，你连打个寒颤都要拼命忍住。『猎犬』就在几步之外——你甚至能闻到它们身上那股湿毛和腐肉混合的腥臭。它们成群地从你身边掠过，喉咙里发出低沉的、断断续续的咕噜声，一颗颗退化的、蒙着白翳的头颅左右摆动，像雷达一样搜寻着空气里任何一丝异常的声波。\n\n有一次，一头猎犬在离你不到一米的地方停了下来。它扭过头，\"望\"向你的方向，湿漉漉的鼻子抽动着。你停止了呼吸，连心跳都仿佛被这份恐惧冻住。一秒，两秒，三秒……它终于收回视线，跟着犬群走远了。\n\n漫长得像一个世纪之后，隧道的尽头，终于出现了一扇锈蚀的铁门。你几乎是扑到门前的，颤抖着推开它，闪身进去，再轻轻带上。\n\n背靠着冰冷的铁门，你无声地、大口大口地喘着气，劫后余生的眼泪几乎要涌出来。\n\n潜行的每一秒都是一场对意志的凌迟。你的小腿开始因为长时间的屈膝而剧烈地颤抖，一滴汗珠从额角滑下，悬在鼻尖，你甚至不敢抬手去擦——任何一个多余的动作，都可能变成压垮你的最后一根稻草。你在心里默数着自己的脚步，用这种笨拙的方式，勉强维持着理智不至于崩断。你想起墙上那行血写的字：\u300c人不是死在这里的，是化在这里的。\u300d你终于懂了那句话的意思——在这样的恐惧里，一个人会先在精神上碎裂，然后才轮到身体。",
-    choices:[
-      { t:"平复心情，看看门后是什么地方", go:"L4_arrive" }
-    ]
-  },
-
-  L2_steam:{
-    level:"LEVEL 2", title:"管道梦",
-    onEnter:s=>{ s.san-=18; },
-    text:"你赌它们看不见。\n\n你冲到最近的一个阀门前，双手用力一拧。滚烫的蒸汽\"轰\"地一声喷涌而出，瞬间在你面前拉起一道白茫茫的、灼热的幕布，视野尽失。你借着这层掩护，低下头，拔腿就往铁门的方向狂奔。\n\n你以为蒸汽能挡住它们的视线——可你犯了一个致命的错误。你忘了墙上那行字：它们看不见，但它们【听得见】。\n\n你踩碎积水的脚步声，在寂静的管道迷宫里，成了黑暗中最清晰、最刺耳的坐标。犬群瞬间调转方向，朝着声源疯狂扑来。你听见身后爪声暴起，越来越近，越来越急——\n\n一头猎犬重重地撞在你的后腰上。你整个人向前扑倒，脸重重地砸在积水里，鞋子飞了出去。你翻过身，看见一张淌着涎水、露出参差獠牙的血盆大口，正朝你的脖颈逼近，那腥臭的热气喷在你脸上。\n\n就在利齿即将咬合的刹那——脚下的地面\"咔啦\"一声裂开了。\n\n年久失修的管道地基，终于不堪重负。你连人带着那头猎犬，一起坠进了骤然裂开的地缝，向着下方无光的深渊，急速坠落。风声、犬吠、你自己的惊叫，全都被抛在了上方。",
-    choices:[
-      { t:"在坠落中，你看清了下方是什么地方", go:"L6_arrive" }
-    ]
-  },
-
-  MEG_arrive:{
-    level:"LEVEL 1", title:"M.E.G. 前哨站",
-    onEnter:s=>{ s.san+=20; s.water+=1; s.light=Math.min(100,s.light+30); },
-    text:"你循着地图上那条被反复描粗的路径，穿过货架的迷宫，终于在一片开阔处，看见了它。\n\n那是一座用一切能找到的东西堆砌起来的堡垒：倒扣的金属货架当围墙，破旧的沙发和床垫垒成掩体，铁皮柜拼成一道能关合的\"门\"。堡垒的入口上方，用刺眼的红色喷漆写着几个大字：『M.E.G. β-7 前哨站』。M.E.G.，全称 The Major Explorer Group，后室里最大的探险者与幸存者互助组织。\n\n你还没走近，两道手电的光柱就钉在了你身上。「站住！报上来历！」一个警惕的男声喝道。你连忙举起双手，磕磕巴巴地说自己是刚穿模进来的新人。\n\n沉默了几秒，光柱移开了。「……又一个倒霉蛋。进来吧。」\n\n堡垒里比你想象的\"正常\"得多。几名衣衫褴褛、却眼神清明的幸存者围坐在一盏昂贵的营地灯旁。他们递给你食物——真正的、密封包装的压缩饼干——和干净的饮用水，还有一节宝贵的备用电池，你的手电重新充满了光。一个自称\"老向导\"的中年女人打量着你，她的脸上有一道旧疤，眼神却出奇地温和。\n\n「能自己走到这儿，说明你运气不坏，脑子也还清醒。」她说，「听着，孩子。这里能让你活下去，但活着不等于回家。想回家，只有一条没人敢打包票的路——传说 Level 0 的某个角落，有一个〔无剪辑点（no-clip）〕，一个现实和后室之间没修补好的破洞。跳进去，也许你就回家了。也许，你会被甩进比这里深得多的虚空，永远出不来。」\n\n她顿了顿，看着你的眼睛：「你想赌吗？」",
-    choices:[
-      { t:"留在前哨站，成为 M.E.G. 的一员", go:"E_meg" },
-      { t:"独自回 Level 0，去赌那个 no-clip 点", go:"L0_return" },
-      { t:"先向老向导多打听打听各层的情报", go:"MEG_intel" }
-    ]
-  },
-
-  MEG_intel:{
-    level:"LEVEL 1", title:"M.E.G. 前哨站",
-    onEnter:s=>{ s.flags.intel=true; s.san+=5; },
-    text:"「知己知彼，总没坏处。」你说。老向导赞许地点点头，蹲下身，用一截炭条在水泥地上画起了简图。其他幸存者也凑了过来，昏黄的灯光把每个人的影子拉得很长。\n\n「往下走，」她画了个向下的箭头，「你多半会到 Level 4，一片废弃办公室。那是个好地方，有水，有吃的。但记住两件事：别碰第四台打印机，还有，如果看见墙上凭空出现一扇窗——离它远点。」\n\n「再往深处，是 Level 5，一座『恐怖酒店』，金碧辉煌，能把人晃花了眼。可里头住着『偷皮者』，一种能剥下你的皮、穿着它去过你人生的东西。进了酒店，千万别搭那部会自己打开门的电梯——没人知道它到底通向哪儿，回来的人一个都没有。」\n\n她画到更深的地方，声音低了下来：「更下面有一整片黑色的海，Level 7。海中央一座『岩上之屋』，进去了就基本出不来了……不过至少，那里面是安全的、暖和的。有些人走投无路，宁愿去那儿了此残生。」\n\n最后，她的炭条停在角落，画了一个奇怪的等号。「还有一个地方，我们内部叫它 Level Fun。」她的声音里第一次带上了真正的恐惧，「别问我它长什么样。我只告诉你一件事——所有从那里出来的人，脸上都在笑。他们再也停不下来了。如果你不小心进去了……不要笑。哪怕装，也别笑。」\n\n她直起身，拍了拍手上的灰：「情报就这些。剩下的，看你的命。」",
-    choices:[
-      { t:"谢过老向导，回 Level 0 去赌 no-clip 点", go:"L0_return" },
-      { t:"权衡再三，还是留下来更安全", go:"E_meg" }
-    ]
-  },
-
-  L0_return:{
-    level:"LEVEL 0", title:"大厅",
-    onEnter:s=>{ s.san-=8; },
-    text:"你谢绝了 M.E.G. 的挽留。留下固然安全，可\"安全地困在异世界一辈子\"，不是你想要的活法。你要回家。\n\n带着补给和情报，你独自返回了那片无尽的黄。\n\n重新踏进 Level 0 的一瞬，那铺天盖地的荧光灯嗡鸣再次将你淹没，熟悉的窒息感卷土重来。但这一次，你不再是那个趴在地毯上瑟瑟发抖的迷路者。你按老向导教的方法，放松眼睛的焦距，不去\"看\"墙和灯，而是去\"感觉\"空气——寻找那种极细微的、空间本身的\"不对劲\"。\n\n你走过一间又一间房间，一次又一次地失望，又一次次地重新集中精神。时间在这里毫无意义，你不知道自己找了多久，也许几小时，也许几天。饥饿和疲惫像潮水一样反复冲刷着你的意志。\n\n就在你快要绝望、几乎要瘫坐下去的时候——\n\n你看见了。\n\n在一处毫不起眼的、和其他角落没有任何区别的墙角，空气正在【微微地扭曲】。像是有人朝一池静水里投下了一颗石子，一圈、一圈近乎透明的涟漪，正无声地从那里荡开。那背后的墙纸，透过扭曲看去，扭成了不可能的形状。\n\n〔no-clip 点〕。它真的存在。\n\n你站在它面前，心脏狂跳。跨过去，要么是家，要么是比死亡更深的未知。你深深吸了一口气，那口气里，全是这个世界发霉的味道。",
-    choices:[
-      { t:"毫不犹豫，纵身跳进那圈扭曲", go:"E_home_solo" },
-      { t:"谨慎起见，先扔一瓶杏仁水进去试探", go:"E_void", req:s=>s.water>0, note:"（你没有杏仁水可扔）" },
-      { t:"临阵退缩，再找找别的出路", go:"L3_arrive" }
-    ]
-  },
-
-  L3_arrive:{
-    level:"LEVEL 3", title:"电气隧道",
-    onEnter:s=>{ s.san-=10; s.light-=15; },
-    text:"站在 no-clip 点前，你的勇气在最后一刻崩塌了。\n\n那扭曲的空气背后，可能是家，也可能是老向导口中\"比死亡更深的虚空\"。你无法把自己的一切，赌在这样一个五五开的破洞上。你后退一步，又一步，最终转身离开了它。\n\n你告诉自己：一定还有别的路。\n\n你钻进了一条之前忽略的、向下的维修通道。金属爬梯把你带到更深的地方，落入 LEVEL 3——一片幽深、狭长的电气隧道。\n\n这里的空气是死的，闷得让人胸口发慌。潮湿的水泥墙上，爬满了裸露的、纠缠成团的电线，有些外皮早已剥落，铜芯森然。它们中的一部分显然还带着电——每隔一会儿，某处就会\"啪\"地爆出一串幽蓝的火花，短暂地照亮隧道，随即又归于黑暗。你的脚下，是没过脚踝的、冰冷的积水。而你无从知道，哪一摊看似平静的积水下面，正藏着一根漏电的电线，等着把致命的电流灌进你的身体。\n\n你举着手电，在这片致命的沼泽里小心翼翼地挪动。前方，隧道分成了两岔。左边那条深处，透出一束微弱的、规律闪动的光——一明，一暗，一明，一暗，像某种信号。右边那条，则彻底沉入了看不见底的黑暗。",
-    choices:[
-      { t:"走向左边那束规律闪动的光", go:"L3_light" },
-      { t:"避开光，摸黑走右边那条岔路", go:"L3_dark" }
-    ]
-  },
-
-  L3_light:{
-    level:"LEVEL 3", title:"电气隧道",
-    onEnter:s=>{ s.light=Math.min(100,s.light+25); s.san+=6; },
-    text:"规律的东西，往往意味着人为。你朝那束光走去。\n\n光源是一台老式的配电箱，嵌在隧道尽头的墙里，箱门半开，里面一排指示灯还在顽强地、规律地明灭闪烁。显然，这一层的某个供电系统至今仍在运转。而在配电箱的下方，有人留下了一份珍贵的\"补给\"：一个还有电的应急电源，和几节用防水布仔细包好的电池。\n\n又是前人的馈赠。在后室，活着的人总在为素未谋面的后来者留下一点东西——这或许是这个残酷世界里，仅存的一点温情。\n\n你把手电的电池换成新的，又给应急电源充满。当雪亮的光柱重新变得坚定而有力时，你几乎要对着这台破配电箱鞠一躬。在后室，有光就是有底气；黑暗里藏着的东西，大多害怕被照亮。\n\n配电箱后面的墙上，有一道被撬开的检修口，里面是一段干燥的、向上延伸的水泥楼梯。楼梯的尽头，透下来一片你无比熟悉、又无比厌恶的光——那种办公室日光灯特有的、惨白而均匀的光。\n\n上面，是 Level 4。",
-    choices:[
-      { t:"顺着楼梯，走向那片惨白的光", go:"L4_arrive" }
-    ]
-  },
-
-  L3_dark:{
-    level:"LEVEL 3", title:"电气隧道",
-    onEnter:s=>{ s.san-=14; s.light-=20; },
-    text:"你有一种直觉：那束规律的光太像\"诱饵\"了。你选择了右边，那条彻底黑暗的岔路。\n\n这是个煎熬的决定。积水越来越深，从脚踝漫到了小腿，冰冷刺骨。头顶的电线在黑暗中滋滋作响，偶尔迸出的火花是唯一的光源，每一次闪亮都让你心惊肉跳——你怕的不是黑，是脚下那看不见的、可能随时夺命的电流。\n\n你尽量踩着自己判断的\"安全\"路线，一步一探。就在隧道中段，你正涉水而过时——\n\n脚下的水面，忽然泛起了一圈涟漪。\n\n不是你踩出来的。\n\n有什么东西，在水里，正贴着你的脚踝，缓缓地游了过去。\n\n你瞬间僵成了一尊石像。全身的血液都凝固了。你不敢低头去看，不敢移动分毫，甚至不敢呼吸。那东西冰冷而滑腻的身躯，隔着水，一寸一寸地擦过你的脚背、脚踝、小腿……你能感觉到它的体积不小，比你想象的要大得多。\n\n它没有攻击你。它只是……路过。像是这片黑暗积水真正的主人，对一个偶然闯入的、瑟瑟发抖的过客，报以一丝漫不经心的宽容。它缓缓游远，钻进了更深的黑暗里，水面重归平静。\n\n你的膝盖一软，几乎瘫倒。求生的本能让你重新站直，用尽最后的力气，连滚带爬地冲向隧道尽头那道透着微光的门。你撞开它，摔进门后的空间，再也顾不上体面。",
-    choices:[
-      { t:"瘫在地上大口喘气，然后看清这是哪里", go:"L4_arrive" }
-    ]
-  },
-});
-
-/* ===== Level 4 办公室 / Level 5 酒店 ===== */
-Object.assign(STORY, {
-  L4_arrive:{
-    level:"LEVEL 4", title:"废弃办公室",
-    onEnter:s=>{ s.san+=12; },
-    text:"门后，是一整层一望无际的废弃办公室。\n\n你怔住了。这里……太正常了。正常得让人心里发毛。灰色的隔断板拼成一格一格的工位，一直延伸到视线的尽头；廉价的转椅东倒西歪，有的还在缓缓自转；显示器黑着屏，边框上贴满了褪色的便利贴；饮水机、复印机、打印机、堆到天花板的文件盒——每一样东西你都无比熟悉，因为几小时前，你还身处一个一模一样的地方。\n\n这是 LEVEL 4，探险者眼中难得的\"补给绿洲\"。头顶的日光灯温和地亮着，不再有那种要命的嗡鸣。你走到饮水机前，将信将疑地按了一下——一股清水汩汩流出。你捧起来喝了一大口，凉的，甜的，是真正的水。抽屉里，你翻出了没拆封的饼干、坚果和几瓶运动饮料。\n\n你靠在一张办公桌前，大口吃着，几乎要热泪盈眶。这几个小时的惊魂，第一次得到了真正的喘息。可越是放松，那股\"不对劲\"的凉意就越是从背后爬上来——这层楼太安静了，没有一丝人声，没有一部电话响起，几万个工位，却空无一人。仿佛所有人都在同一个瞬间，凭空消失了。\n\n就在这片死寂里，你注意到不远处一个工位上，一台老式电脑的屏幕，居然还亮着。屏幕的光在昏暗的办公区里，像一只窥视的眼睛。上面似乎开着一个没关闭的文档。\n\n就在你几乎要相信这份\u201c正常\u201d的时候，办公区深处，一部电话，毫无征兆地响了。\n\n那清脆的、老式座机的铃声，在死寂的空旷里显得无比刺耳。铃声固执地响着，一声，又一声，仿佛有人正在电话那头，焦急地等待着谁来接听。你僵在原地，每一根神经都绷紧了。是求救？是陷阱？还是……这层楼在用它自己的方式，跟你\u201c打招呼\u201d？你死死盯着那个声音传来的方向，没有一格隔间亮着灯，没有一个人影。铃声响了很久很久，然后，在某一声的中途，戛然而止。办公室重归死寂，仿佛刚才那通电话，从未存在过。",
-    choices:[
-      { t:"先补给休整，然后去看那台亮着的电脑", go:"L4_pc" },
-      { t:"不敢久留，径直穿过办公室继续往前走", go:"L4_deeper" },
-      { t:"翻找各个隔间，看有没有其他幸存者的痕迹", go:"L4_cubicles" },
-      { t:"隔间尽头的墙上，有一扇不该出现的窗——你走近去看", go:"E_window" }
-    ]
-  },
-
-  L4_cubicles:{
-    level:"LEVEL 4", title:"废弃办公室",
-    onEnter:s=>{ s.water+=1; s.san+=3; },
-    text:"如果这里困过别人，一定会留下什么。你开始一个隔间、一个隔间地翻找。\n\n大多数工位空空如也，只有积灰和被遗弃的日常：一个冷掉的马克杯，杯壁结着褐色的茶渍；一张全家福，照片上的人在冲镜头微笑，可你越看越觉得，那些笑容有哪里不太对劲；一台还亮着待机灯的手机，电量停在百分之一，永远不再减少。\n\n在办公区最深处的一个角落工位上，你发现了一本被翻得卷了边的笔记本。前面几十页密密麻麻，记录着一个人试图理解、试图逃离这里的全部努力——测量房间的尺寸、统计打印机的数量、绘制并不存在的地图。字迹从工整，一点点变得潦草、颤抖，到最后几乎无法辨认。\n\n你翻到最后一页写有字的地方：\n\n『第 47 天。饮水机的水快没味道了，或者是我的舌头快没知觉了。我数过，这层楼至少有一万个隔间。我给每一个都编了号，这样就不会在同一个地方转圈。\n\n如果你——不管你是谁——看到这行字：三台打印机。是三台。不是四台。我不知道那第四台是什么，但我朋友按了它，然后他就……算了。\n\n只按三台。求你了。』\n\n笔记旁边，静静放着一瓶只喝了一半的杏仁水。它的主人显然没能用上它。你默默地把它收进背包，心里说了声谢谢。",
-    choices:[
-      { t:"去看那台还亮着的电脑", go:"L4_pc" },
-      { t:"带着这条警告，继续往办公室深处走", go:"L4_deeper" }
-    ]
-  },
-
-  L4_pc:{
-    level:"LEVEL 4", title:"废弃办公室",
-    onEnter:s=>{ s.san+=6; },
-    text:"你在那台亮着的电脑前坐下。转椅的皮革冰凉。\n\n屏幕上，是一份没有关闭的 Word 文档，标题用加粗的黑体写着：《回归协议 v3》。\n\n你的心跳漏了一拍。\"回归\"。这是你穿模以来，看到的第一个直接指向\"回家\"的词。你屏住呼吸，一行一行地读下去：\n\n『致每一个读到这份文档的人：\n\n经过我们（M.E.G. 制图组第九分队）反复的、以生命为代价的验证，现确认：在本层（Level 4），依次按下任意三台打印机的电源键，可以触发一扇通往现实的〔回归门〕。\n\n注意事项：\n一、顺序无所谓，但数量是唯一的关键——只按三台。\n二、门出现后会维持约六十秒，请立即穿过。\n三、不要回头。』\n\n文档到这里本该结束。但在最下方，有人用完全不同的、明显是仓促间敲上去的字体，补了最后一段。那字里行间的恐慌，几乎要透过屏幕溢出来：\n\n【别相信第四台打印机。】\n【它长得和其他三台一模一样，但它不是打印机。】\n【是它先找到我们的。别去数第四台。别去找它。它就在这层楼的某个地方，等着有人去按它。】",
-    choices:[
-      { t:"找到三台打印机，依次按下电源键", go:"E_home_printer" },
-      { t:"好奇心作祟，去把那\"第四台打印机\"找出来", go:"E_funhouse" },
-      { t:"不碰任何打印机，继续往深处探索", go:"L4_deeper" }
-    ]
-  },
-
-  L4_deeper:{
-    level:"LEVEL 4", title:"废弃办公室",
-    onEnter:s=>{ s.san-=6; },
-    text:"你决定不赌打印机。三台、四台，万一记错了、按错了呢？在这里，一个错误就是永远。你选择用自己的脚，去找一条能亲眼看见的出路。\n\n你穿过一望无际的隔间，走了很久很久。日光灯一盏接一盏在头顶掠过，工位一格接一格向后退去，多到你开始怀疑那本笔记里\"一万个隔间\"的说法是否太保守了。你走得腿都麻了，办公区却依然没有尽头。\n\n就在你几乎要认定这一层也是无限循环的时候，前方终于出现了不一样的东西——一扇气派的双开门。深色的实木，黄铜的门把，门楣上钉着一块铜牌，上面刻着一个词：\n\n『BALLROOM · 宴会厅』\n\n办公楼里，怎么会有宴会厅？\n\n你握住冰凉的门把，推开了它。\n\n眼前的景象让你倒吸一口冷气——那是一种华美到极致、也诡异到极致的奢靡。巨大的水晶吊灯从高得不可思议的穹顶垂下，折射出万千光点；猩红色的地毯厚得能没过脚踝，一直铺向望不到头的远方；鎏金的廊柱、丝绒的帷幔、摆着银器的长桌……一切都精致得像一场盛大晚宴的前夜，却又空无一人，落满了一层薄薄的、暗示着漫长岁月的灰。\n\n这里是 LEVEL 5：〔恐怖酒店（Terror Hotel）〕。老向导警告过的地方。越是金碧辉煌，那股\"哪里根本不对劲\"的窒息感就越是浓重。\n\n走廊的尽头，一部老式的、雕花铜门的电梯，正伴随着一声悠长的\"叮\"，缓缓地、自动地打开了。里面，空无一人。",
-    choices:[
-      { t:"走进那部自动打开的电梯", go:"E_elevator" },
-      { t:"无视电梯，登上宴会厅的大理石楼梯", go:"L5_stairs" },
-      { t:"推开一扇虚掩的客房门，看看里面", go:"L5_room" }
-    ]
-  },
-
-  L5_room:{
-    level:"LEVEL 5", title:"恐怖酒店",
-    onEnter:s=>{ s.san-=8; },
-    text:"一扇客房的门虚掩着，门缝里透出温暖的、昏黄的灯光。好奇心，或者说某种被这奢华勾起的、想要片刻\"正常\"的渴望，驱使你推开了它。\n\n房间陈设得无可挑剔：铺得一丝不苟的大床，雪白的床品；擦得能照出人影的落地镜；衣架上，一套熨帖笔挺的深色西装，仿佛正等着它的主人前来赴宴。空气里有一丝若有若无的、高级香水的味道。这里舒适得让你几乎卸下了防备。\n\n你走到那面落地镜前，想看看自己这几个小时下来，变成了什么鬼样子。\n\n镜子里，是你。狼狈，疲惫，但确实是你。\n\n你抬起手，想理一理凌乱的头发——\n\n可镜子里的\"你\"，慢了半拍。\n\n它没有跟着你抬手。它就那样静静地站着，看着你。然后，在你僵住的注视下，它的嘴角，开始一点点、一点点地向上扬起，扯出一个诡异的、你从未做过、也绝不可能做出的微笑。那笑容越咧越大，超出了人类面部肌肉的极限。\n\n身后传来一阵窸窣。你猛地回头——衣架上那套西装，动了。它没有身体，两条空荡荡的裤管却像有腿一样弯曲着，空空的袖子里，仿佛正有什么无形的东西在缓缓\"穿上\"它。而它\"领口\"的位置，正在凝聚出一张脸的轮廓——【你的脸】。\n\n『偷皮者（Skin-Stealer）』。它不杀你，它要\"成为\"你。",
-    choices:[
-      { t:"抓起床头台灯砸碎镜子，夺门而出", go:"L5_stairs" },
-      { t:"僵在原地，想看清它究竟要做什么", go:"E_skinstealer" }
-    ]
-  },
-
-  L5_stairs:{
-    level:"LEVEL 5", title:"恐怖酒店",
-    onEnter:s=>{ s.san-=5; },
-    text:"你避开了电梯，也逃离了那个诡异的房间。你选择相信自己的双腿，登上了宴会厅一侧那道宽阔的、猩红地毯铺就的大理石楼梯。\n\n你往上走。一层，两层，三层。楼梯的每一个转角，都挂着华丽的镜子和陈旧的油画，画中人的眼睛仿佛在追随你的脚步。\n\n可很快，你就发现了不对劲。每一层的楼梯口，墙上都镶着一块黄铜的楼层数字牌——而无论你往上爬了多少层，那块牌子上的数字，永远是【同一个】。你甚至试着往下走了几层，数字依然纹丝不动。你被困在了一段无限循环的楼梯里，向上是它，向下也是它。\n\n绝望一点点爬上心头。你开始漫无目的地乱走，冲进楼梯间的每一扇门，又被相同的走廊弹回来。汗水浸湿了后背，你几乎要放弃了——\n\n直到某一次，你推开某一段楼梯尽头的门，扑面而来的，不是熟悉的猩红走廊。\n\n是【漆黑】。\n\n以及，一阵咸腥的、冰冷的海风。\n\n你愣住了。你迟疑着迈出一步，脚下华贵的大理石，不知何时已经变成了湿滑、粗粝的天然岩石。华丽的酒店在你身后悄然消融，取而代之的，是浓得化不开的黑暗，和黑暗尽头，某种巨大水体拍打岩岸的、沉闷的声响。\n\n你从 Level 5，滑进了 Level 7 的边缘。前方，是一片望不到边的黑色海洋。",
-    choices:[
-      { t:"走进这片黑暗与海风之中", go:"L7_arrive" }
-    ]
-  },
-});
-
-/* ===== Level 6 / 7 / 9 / Fun / Run ===== */
-Object.assign(STORY, {
-  L6_arrive:{
-    level:"LEVEL 6", title:"无光之地",
-    onEnter:s=>{ s.san-=15; },
-    text:"你重重地摔在地上。\n\n还没等你从坠落的眩晕中缓过来，一个更彻底的恐惧就攫住了你：\n\n你什么都看不见。\n\n不是普通的\"暗\"。你在 Level 3 的黑暗里，好歹还能看见电线迸出的火花，还能凭借手电撕开一道口子。而这里的黑，是【绝对】的。你把手举到眼前，贴到几乎碰到鼻尖——什么都没有。光在这里，仿佛被某种贪婪的东西彻底吞噬了，连一个光子都无法幸存。这是一种能实实在在压在皮肤上、灌进肺里的、有质量的黑暗。\n\n这是 LEVEL 6，探险者手册上用红笔重重圈起的\"绝命层\"之一。关于它的规则，只有冷冰冰的一条：\n\n〔在这里，绝对不能点灯。〕\n\n因为这里的黑暗，是有主人的。任何一束光，无论多微弱，都会像血滴入海一样，瞬间惊动那些以光为食、常年潜伏在无边黑暗里的东西。它们平时安静地\"沉睡\"，可一旦有光亮起，它们会立刻从四面八方涌来，快得你连后悔的时间都没有。\n\n你的手电，就攥在你汗湿的手心里。开关，触手可及。\n\n黑暗从四面八方挤压过来，压得你几乎窒息，一种原始的、对光明的渴望在你脑中疯狂尖叫：开灯！就一秒！你需要看见！你需要确认自己还\"存在\"！哪怕一秒也好——\n\n你死死地掐住了那个念头。你知道，那一秒，会是你的最后一秒。\n\n你从未如此深刻地理解过\u201c黑暗\u201d这个词。在现实里，再暗的夜也有月光、有街灯、有电子设备的微光，黑暗只是光的缺席。可在这里，黑暗是一种\u201c在场\u201d，一种有重量、有体积、几乎有体温的实体，它主动地涌进你的眼睛、鼻孔、毛孔，填满你身体里每一处曾经属于光的空间。你甚至开始怀疑自己是否还睁着眼——你反复地眨眼，试图分辨\u201c闭眼的黑\u201d和\u201c睁眼的黑\u201d，却发现二者毫无区别。这种连\u201c自己是否在看\u201d都无法确认的处境，比任何具体的怪物都更接近疯狂本身。",
-    choices:[
-      { t:"把手电塞进包底，逼自己靠触觉摸索", go:"L6_grope" },
-      { t:"实在受不了了，点亮手电哪怕一秒", go:"E_lightsout" }
-    ]
-  },
-
-  L6_grope:{
-    level:"LEVEL 6", title:"无光之地",
-    onEnter:s=>{ s.san-=12; },
-    text:"你颤抖着，把手电塞进了背包最深的角落，又把包紧紧抱在怀里，仿佛这样就能锁住那个致命的诱惑。\n\n然后，你张开双臂，像一个真正的盲人那样，开始用指尖\"阅读\"这个世界。\n\n你的手掌贴上了一面墙——湿冷、黏腻，覆着一层不知名的、黏糊糊的膜。你就靠着这面墙，一寸、一寸地向前挪动，脚在身前小心地扫探，生怕踩空，或是踩到什么\"不该踩\"的东西。\n\n很快，你意识到，这片黑暗里，不止你一个。\n\n你听见了呼吸声。\n\n【无数】细碎的、绵长的呼吸声，就在你的四周，近得你甚至能感觉到那微弱的气流拂过你的手背、你的脸颊、你的后颈。它们环绕着你，与你擦肩而过，从你头顶掠过，从你脚边溜走。你被它们包围了，密密麻麻地包围了。\n\n但它们没有攻击你。因为它们\"看\"不见你——它们和你一样，被禁锢在这绝对的黑暗里，只能靠着别的东西感知世界。只要你不发光，你在它们眼中，就和它们自己一样，是黑暗的一部分。你屏住呼吸，把每一次吐纳都压到最轻，和那些看不见的邻居们，共享着这片死寂。\n\n你不知道自己在黑暗里摸索了多久。时间失去了所有意义。就在你的神经快要因为这无边的恐惧而崩断时，你的指尖，触到了一个冰冷的、圆形的金属物体。\n\n是一个转盘。像是……一扇船舱门上的那种转盘。\n\n你用尽全身力气转动它。伴随着一阵金属摩擦的锐响，门开了一道缝，一线灰蓝色的、久违的微光，怯生生地渗了进来。门后，是一片翻涌着浓雾的、无边的海。",
-    choices:[
-      { t:"推开舱门，走进那片灰蓝色的海", go:"L7_arrive" }
-    ]
-  },
-
-  L7_arrive:{
-    level:"LEVEL 7", title:"无限海洋",
-    onEnter:s=>{ s.san-=8; },
-    text:"LEVEL 7。\n\n一片没有尽头的黑色海洋。\n\n你站在一小片湿滑的礁石上，眼前的景象壮阔得令人绝望：铅灰色的、死寂的天空低低地压下来，与漆黑的、深不见底的海面在远方交融，分不清界限。浓重的白雾贴着水面翻涌、流动，像有生命一样。海水冰冷刺骨，一浪一浪地拍打着礁石，发出永恒的、单调的轰鸣。除了水，还是水，四面八方，一直延伸到你目光的尽头。\n\n这里美得可怕，也孤独得可怕。\n\n在远处的迷雾中，你隐约看见了一个轮廓——一座孤零零的建筑，立在一块凸出海面的巨大礁石上。那就是探险者口中传说的〔岩上之屋（The House on the Rock）〕。据说，它的窗里永远亮着一盏温暖的灯，据说，进去的人能得到永恒的庇护与安宁——也据说，进去的人，再没有一个出来过。\n\n你眯起眼，努力在雾中辨认。除了那座屋子，似乎在更远、更偏的另一个方向，还有一个更加高耸、更加模糊的黑色剪影，顶端仿佛有微光在缓慢地旋转扫动。\n\n而在你脚下，那深不见底的黑色海水里，有巨大的、缓慢移动的阴影，正从礁石下方悠悠游过。它们大得超乎想象。你不敢去想那是什么。\n\n你只有一个身体，和越来越少的体力。你必须选择一个方向。\n\n你在这片海边站了很久，久到冰冷的海风把你的衣服吹得半干又打湿。一种前所未有的渺小感将你彻底淹没——在 Level 0，你至少还被墙壁包围，还有\u201c房间\u201d这个尺度可以丈量自己的存在。可在这里，面对这片吞噬一切的、没有对岸的黑水和低垂的铅灰色天空，你渺小得像一粒随时会被抹去的尘埃。海浪永恒地、单调地拍打着礁石，那声音里没有一丝生命的暖意，只有一种宇宙尽头般的、绝对的漠然。它不恨你，也不爱你。它只是存在着，而你，微不足道。",
-    choices:[
-      { t:"朝着那盏温暖的灯，游向岩上之屋", go:"E_house" },
-      { t:"深吸一口气潜入水下，赌海底有通往上层的路", go:"E_deep" },
-      { t:"攀着礁石，找找看有没有别的岸", go:"L7_reef" },
-      { t:"游向更远处那个旋转着微光的高耸剪影", go:"E_lighthouse" }
-    ]
-  },
-
-  L7_reef:{
-    level:"LEVEL 7", title:"无限海洋",
-    onEnter:s=>{ s.san-=6; s.light-=10; },
-    text:"游向大海太冒险了。你决定沿着这片礁石，看能不能找到一条相连的、能踩着走的路。\n\n这是一个艰难的决定。礁石湿滑、锋利，长满了黏腻的、不知名的海藻。你手脚并用，一寸一寸地攀爬、挪动，冰冷的浪花一次次劈头盖脸地砸下来，海水灌进口鼻，咸得发苦。好几次，你的手在湿滑的岩面上打滑，指甲抠进石缝，才没有跌进下方那片游动着巨大阴影的黑水。\n\n你不知道自己爬了多久。体力像沙漏里的沙，一点点漏尽。就在你几乎要脱力松手的时候，前方的礁石，竟然真的连上了一片\"陆地\"。\n\n可当你爬上那片陆地，看清眼前的景象时，你却愣住了。\n\n那不是海岸。\n\n那是一排静止的路灯，一片修剪得整整齐齐的草坪，一栋栋一模一样的、有着尖顶和白色栅栏的两层小楼——一整片安静的、住宅区的街道，笼罩在一层永恒的、橘红色的【黄昏】里。太阳，一轮巨大的、暗红的太阳，卡在房屋的天际线上，永远地悬着，既不升起，也不落下，把每一样东西的影子都拉得长长的，投向同一个方向。\n\n海浪的声音消失了，取而代之的是一片草坪上，自动喷淋器悠悠转动的\"沙沙\"声。\n\n你从无边的海洋，走进了 LEVEL 9：无尽郊区。",
-    choices:[
-      { t:"走进这片诡异宁静的黄昏郊区", go:"L9_arrive" }
-    ]
-  },
-
-  L9_arrive:{
-    level:"LEVEL 9", title:"无尽郊区",
-    onEnter:s=>{ s.san+=6; },
-    text:"永恒黄昏笼罩下的郊区，安静得近乎神圣。\n\n这是一种令人毛骨悚然的宁静。草坪上的喷淋器忠实地转着圈，把水珠洒向被暮色染红的草叶；某一户人家的客厅窗户里，透出电视机幽幽的蓝光，一闪一闪；空气里甚至飘着一丝若有若无的、晚餐的香味，像是烤箱里正焙着什么。\n\n这里的一切，都在模仿\"家\"。模仿得惟妙惟肖，惟独缺了最关键的东西——人。\n\n或者说，你隐隐觉得，住在这里的\"东西\"，只是穿着\"人\"和\"家\"的皮。\n\n街道是笔直的，横平竖直地切割着这片住宅区，每一条都通向那橘红色的、无限远的地平线，没有尽头。你站在一个路口，感到一种奇异的平静，又混着更深的不安。\n\n你注意到三件事。左手边一条车道上，停着一辆普通的家用轿车，车门虚掩着，车钥匙似乎还插在点火孔里，在暮色中反着微光。正前方，斜对面那栋房子的大门，此刻正缓缓地、无声地、自己打开了，门内是一片温暖的昏黄。而那条笔直的街道本身，也在向你无声地招手，仿佛只要一直走下去，就能走到某个答案跟前。",
-    choices:[
-      { t:"走向那辆车，试试能不能把它开走", go:"E_drive" },
-      { t:"走进那扇自己打开的、透着暖光的门", go:"L9_house" },
-      { t:"什么都不碰，沿着笔直的街道一直走下去", go:"E_suburb" }
-    ]
-  },
-
-  L9_house:{
-    level:"LEVEL 9", title:"无尽郊区",
-    onEnter:s=>{ s.san-=10; },
-    text:"那扇为你敞开的门，那片温暖的灯光，像一个太过甜美的邀请。你太累了，太想要一个\"家\"了。你走了进去。\n\n屋内的一切，都精准地击中了你对\"家\"的所有想象。玄关处摆着拖鞋，墙上挂着照片，走廊尽头的客厅里，暖黄的灯光下，一台电视正播放着某个永远不会结束的、笑声不断的节目。餐桌上，摆着一桌热气腾腾的晚饭，四菜一汤，还冒着白气，仿佛主人刚刚才把它们端上来。\n\n餐桌旁，坐着一\"家人\"。\n\n他们听见你进门的声音，齐刷刷地转过头来，朝你露出了……微笑。\n\n可他们没有脸。\n\n每一张脸，都是那片熟悉的、平滑的、没有五官的灰白。是一整屋子的『无脸人』。父亲，母亲，还有两个身量矮小的\"孩子\"，一家四口，正friendly地\"望\"着你。他们没有表现出任何敌意，恰恰相反——那位\"父亲\"缓缓站起身，为你拉开了餐桌旁一把空着的椅子，用无声的姿态，热情地示意你【坐下，加入他们】。\n\n你的目光，落在了墙上那张\"全家福\"上。照片里，这一家人围坐在一起。可在他们中间，有一个明显的、留白的空位——那个空位的轮廓，那个身影的形状，恰好，就是【你】。\n\n仿佛这个家，从一开始，就为你留了一个位置。而它们，已经等了你很久很久。",
-    choices:[
-      { t:"礼貌地后退，转身离开这个\"家\"", go:"E_suburb" },
-      { t:"鬼使神差地，在那把为你留着的椅子上坐下", go:"E_family" }
-    ]
-  },
-
-  LFUN_arrive:{
-    level:"LEVEL =", title:"Level Fun",
-    onEnter:s=>{ s.san-=25; },
-    text:"你闭上眼，随着那具无脸的身影，走进了墙里。\n\n穿过那层黏软冰凉的\"墙\"的瞬间——\n\n一阵刺耳的、失真的、欢快到令人毛骨悚然的party音乐，轰然在你耳边炸开。\n\n你猛地睁开眼。满眼是刺目的、饱和到发腻的色彩：褪了色的彩色气球一串串挂在天花板上，缓缓晃动；一座吱呀作响的旋转木马在角落里空转着，木马脸上的漆已经剥落，露出下面森白的底子；奶油蛋糕堆成了小山，上面爬满了……你不敢细看；彩带和亮片撒满一地，踩上去黏糊糊的。\n\n而最让你头皮发炸的，是【笑脸】。墙上，天花板上，地板上，甚至那些气球上——到处都画着、贴着、挂着一张张咧到极限的笑脸，密密麻麻，注视着你。\n\n这里是臭名昭著的 LEVEL 【=】，探险者们谈之色变的〔Level Fun〕。老向导最后的警告在你脑中炸响：不要笑。哪怕装，也别笑。\n\n可你已经晚了一步。\n\n音乐声中，一群身影缓缓转过头来。它们穿着华丽却肮脏的宴会礼服，戴着尖尖的派对帽——『派对客（Partygoers）』。它们本该是人，可它们的脸，被某种力量扭曲、拉扯，定格成了一个个无法停止的、癫狂到极致的微笑，嘴角咧到了耳根，眼睛瞪得溜圆，泪水混着腐坏的妆容淌下来，可那笑容，一秒也停不下来。\n\n它们朝你张开双臂，用一种破碎的、走了调的合唱，向你发出邀请：\n\n「欢迎——！加入我们——！永远的——派对——！」",
-    choices:[
-      { t:"强迫自己也扬起嘴角，配合它们、伺机脱身", go:"E_smile" },
-      { t:"再也忍不住，尖叫着推开它们夺路狂奔", go:"LRUN_arrive" }
-    ]
-  },
-
-  LRUN_arrive:{
-    level:"LEVEL !", title:"Run For Your Life",
-    onEnter:s=>{ s.san-=15; },
-    text:"你没法笑。面对这一屋子癫狂的笑脸，你的身体本能地做出了相反的反应——你放声尖叫，双手用力推开挡在面前的派对客，头也不回地冲了出去。\n\n它们的笑容在你身后凝固了一瞬，随即，那种诡异的欢快气氛骤然破碎，化作某种更原始、更暴戾的东西。整个 Level Fun 仿佛都因为你的\"扫兴\"而愤怒了。\n\n你冲过一道门，眼前的景象彻底变了——\n\n你闯进了一条狭长的、灯光疯狂闪烁的红色走廊。红色的警示灯以一种令人眩晕的频率明灭，把一切照得忽明忽暗。走廊的墙壁上，用刺目的黄黑相间的字体，喷涂着简短而绝望的警告：【RUN】【别回头】【它们来了】【快跑】。\n\n这是 LEVEL !——一条不为居住、不为探索，只为【逃命】而存在的层。\n\n身后，声音汇成了一股洪流：无数只脚踩踏地面的闷响，尖锐的爪子刮擦墙壁的锐叫，还有那此起彼伏、永不停歇的、癫狂的笑声。它们全都来了。所有你逃过的、没逃过的东西，仿佛都汇集到了你的身后，正化作一道吞噬一切的黑潮，向你【逼近】。\n\n你只能跑。玩命地跑。\n\n红色走廊在前方猛地一分为二。你的心脏几乎要炸开。你只有一瞬间——一瞬间——来做出选择。身后的洪流，已经近在咫尺。",
-    choices:[
-      { t:"冲进左边那条灯光更亮的岔路", go:"E_run_out" },
-      { t:"钻进右边那条黑暗狭窄的缝隙", go:"E_run_dark" },
-      { t:"用尽最后的勇气，回一次头，看看追来的到底是什么", go:"E_run_look" }
+      { t:"闭上眼，纵身跳进扭曲的空气里", go:"E_home_solo" },
+      { t:"先扔一瓶杏仁水进去试探", go:"E_void", req:s=>s.water>0, note:"没有杏仁水可扔", cost:"耗 1 杏仁水" },
+      { t:"不敢赌，还是老实往下走", go:"L1_enter", cost:"↓ 下探" }
     ]
   },
 });
 
 /* =========================================================
-   结局 · 上半（E01 - E12）
+   故事 · 第二批：Level 1 仓库 / M.E.G. / Level 2 管道梦
    ========================================================= */
 Object.assign(STORY, {
+  /* ---------- Level 1 · 补给点 ---------- */
+  L1_enter:{
+    dep:1, level:"LEVEL 1", title:"废弃仓库",
+    onEnter:s=>{ s.san-=4; s.light-=8; },
+    text:"你撕开发黑的墙纸，露出一道仅容一人侧身的裂缝，缝里透出干燥的冷风。你屏住呼吸挤了进去，脚下猛地一空，顺着一道陡峭的斜坡失控滑落，最后重重摔在冰冷坚硬的水泥地上，摔得眼冒金星，尾椎骨传来一阵钝痛。\n\n你龇牙咧嘴地爬起来，环顾四周——这里，和上面那片令人窒息的黄，截然不同。\n\n高耸入顶的金属货架，一排排、一列列，纵深延伸进昏暗里，望不到头。架子上堆满了落灰的木箱、卷成一团的电缆、锈迹斑斑的机器和叫不出名字的零件。零星几盏工业吊灯从高处垂下，忽明忽暗，把货架的影子拉得老长，投在地上，像一片沉默的森林。空气干燥了许多，那股钻进骨头缝里的霉味，也终于淡了下去，取而代之的，是机油、铁锈和纸箱的味道——一种奇异地令人安心的、属于「人造物」的味道。\n\n这里是 LEVEL 1——探险者口中相对安全的「缓冲区」。实体稀少，物资偶有，是这座无限迷宫里，难得可以让人真正喘一口气、坐下来想想事情的地方。有经验的流浪者说，Level 1 像是后室为迷路者准备的第一个「中场休息」，仿佛这个吞噬一切的世界，也会偶尔，给猎物一点喘息的仁慈——又或者，那只是为了让你重新燃起希望，好在下一层，把它加倍地夺走。\n\n你背靠着一排货架，缓缓滑坐到地上，闭上眼，第一次有机会认真面对那个盘旋在脑中、却一直不敢细想的问题：你到底，该怎么回家？\n\n家。你想起那个你嫌它小、嫌它乱、常常加班到深夜才回去的出租屋。想起玄关那盏声控灯，你总要跺两下脚它才亮。想起冰箱上贴着的外卖单，想起阳台上那盆你老是忘记浇水、却顽强活着的绿萝。那些你从未珍惜过的、乏味到让你厌倦的日常细节，此刻，却像一根根细小的针，密密麻麻地，扎在你的心上。\n\n家里的灯，还亮着吗？有没有人，发现你不见了？还是说，在那个世界里，从你掉下来的那一秒起，你，就已经彻底地、干干净净地，不存在了——像一段被剪掉的胶片，连同你所有的痕迹，一起消失得无影无踪？\n\n就在这时，远处的货架之间，有微弱的灯光在轻轻晃动，隐约还夹杂着人低声交谈的声音。\n\n是……活人？在这种地方，还能有活着的、会说话的人？你的心，猛地一跳。",
+    choices:[
+      { t:"先翻翻这些木箱，补充点补给", go:"L1_supply", hidden:s=>s.flags.l1supply },
+      { t:"循着人声,靠近那片晃动的灯光", go:"MEG_enter" },
+      { t:"不惊动任何人，径直找往下的路", go:"L1_fork" }
+    ]
+  },
+  L1_supply:{
+    dep:1, level:"LEVEL 1", title:"废弃仓库",
+    onEnter:s=>{ s.flags.l1supply=true; s.water+=2; s.light=Math.min(100,s.light+40); s.san+=8; },
+    text:"你撬开几只木箱，锈死的搭扣发出刺耳的呻吟。\n\n大多数箱子里，是发霉的纸张、锈成一坨的零件、还有一些你根本认不出用途的、属于另一个时代的工业残骸。但你没有放弃，一只接一只地翻找——在后室，「多搜一个箱子」和「少搜一个箱子」之间的差别，有时候就是生与死。\n\n终于，一只箱子里，整整齐齐地码着几瓶〔杏仁水〕，像是某位前辈探险者精心藏下、却再也没能回来取走的储备。你拿走了两瓶，指尖因为激动而微微发抖。另一只箱子里是一堆应急物资，你找到了几节还有电的电池，把手电重新充得满满当当——光柱「唰」地一下变得雪亮而坚定，刺破了周围的昏暗。在后室，有光，就是有底气；没光，你连自己是怎么死的都看不清。\n\n箱底，压着一张手绘的地图，边角已经磨损、卷曲，纸面上被无数只手摸得发亮。上面用红笔重重地圈出一个方向，旁边标注着『M.E.G. β-7 前哨站』的字样，还有一行更小的字，像是特意留给后来者的口信：\n\n『活人。可交易。可休整。往这边走——如果你还想听见人说话的声音。』\n\n你把地图仔细折好，塞进贴身的口袋。「人说话的声音」——落进这里之后，你才第一次意识到，这样一件微不足道的小事，竟会变得如此奢侈。",
+    choices:[
+      { t:"照地图去 M.E.G. 前哨站看看", go:"MEG_enter" },
+      { t:"不信任陌生人，自己找路往下走", go:"L1_fork" }
+    ]
+  },
+  MEG_enter:{
+    dep:1, level:"LEVEL 1", title:"M.E.G. 前哨站",
+    onEnter:s=>{ s.san+=18; s.water+=1; s.light=Math.min(100,s.light+25); },
+    text:"你循着那点晃动的灯光，小心翼翼地走过去。转过几排货架，一座由书架、旧沙发、铁皮柜和路障堆叠而成的堡垒，出现在了你眼前。堡垒的入口用红色喷漆歪歪扭扭地写着『M.E.G. β-7』——那是『M.E.G.（大流浪者探险组，The Major Explorer Group）』留在这一层的前哨站，一个由后室幸存者们自发组成的、松散却顽强的组织。\n\n几名衣衫褴褛、脸上带着风霜的幸存者立刻警惕地围了上来，手里握着削尖的钢管。他们绕着你转了一圈，逼你说话、逼你回答一些只有「人」才懂的问题，反复确认你不是某种伪装成人形的实体之后，紧绷的气氛才缓和下来。\n\n他们收留了你。有人递来一块干硬的压缩饼干和半瓶清水，有人往你怀里塞了一节还有电的备用电池。围着一盏暖黄色的营灯，一位被大家称作「老向导」的中年女人，打量着你这张还没被后室磨平的脸，缓缓开口：\n\n「新来的？能活着摸到这儿，运气不算差。」她往火堆里添了根柴，火光在她眼里跳动，「想回家的话，路子有几条。最近的一条，就在下面第四层，一间大得没边的办公室里——找到那儿的打印机，按对三台，能开出一扇回家的门。简单，稳妥。可那扇门送你回去的，也就只是你原来那种日子而已。」\n\n她顿了顿，声音压低了些：「也有人说，越往深处走，藏着越『干净』的出口，能把人送回真正想回去的地方。可那种深度……」她摇摇头，「十个下去，九个再没上来过。剩下那一个，回来时也疯了。你自己，掂量着办。」",
+    choices:[
+      { t:"就留在前哨站，别再往下冒险了", go:"E_meg" },
+      { t:"向老向导多打听打听下面的层", go:"MEG_intel", hidden:s=>s.flags.megintel },
+      { t:"谢过众人，继续往下探", go:"L1_fork", cost:"↓ 下探" }
+    ]
+  },
+  MEG_intel:{
+    dep:1, level:"LEVEL 1", title:"M.E.G. 前哨站",
+    onEnter:s=>{ s.flags.megintel=true; s.san+=5; },
+    text:"老向导用一截烧黑的炭条，在冰冷的水泥地上，一层一层地画起了简图。她画得很慢，很仔细，像是在把一条用许多条命换来的经验，郑重地交到你手里。\n\n「第二层，管道梦，热得像口大蒸笼。」她在图上戳了一下，「那儿有『猎犬』，一群瞎了眼的猎手，眼睛早退化没了，全靠听。你要是慌了、腿软了、喘气重了、心跳快了——它们立马就循着声音扑上来，几十张嘴，眨眼就能把你分了。所以下去之前，【务必让自己冷静】。杏仁水，就是干这个用的。别舍不得。命都没了，留着水泡澡吗？」\n\n她的炭条往下移。「第三层，电气隧道，黑，而且到处漏电。地上全是水，头顶全是断线，哪根带电、哪摊水要命，你不点灯根本看不出来。所以——【没有足够的光，千万别下去】。我见过一个小伙子，电量见了底还硬闯，第二天有人发现他的时候，人还站着，靠在墙上，早就焦了。」\n\n她顿了顿，声音沉了下来，炭条在图的最下方，画了一片纯粹的黑。「再往下，第六层，『无光之地』。那儿的规矩，只有一条，也是最简单的一条：无论多黑，多冷，多怕，【绝对不能开灯】。那片黑里有东西，以光为食，你点亮的那一刻，就是你把自己端上桌的那一刻。开灯的人，我送走过不少。一个，都没回来过。」\n\n她直起腰，看着你，火光在她布满皱纹的脸上明明灭灭：「记住这些。也许，能让你在下面，多喘几口气。」",
+    choices:[
+      { t:"记下这一切，继续往下探", go:"L1_fork", cost:"↓ 下探" },
+      { t:"想想还是留下来安全", go:"E_meg" }
+    ]
+  },
+  L1_fork:{
+    dep:1, level:"LEVEL 1", title:"废弃仓库",
+    text:"你在货架构成的迷宫里穿行，最终，在最深处的一个角落，找到了一段向下延伸的、锈迹斑斑的铁梯。\n\n梯子探进下方一片翻涌的、乳白色的蒸汽里，看不见底。一股湿热的、带着铁锈和机油味的气浪，从下面汹涌地喷薄上来，扑在你脸上，糊住了你的视线，也让你的心，沉了下去。\n\n你知道下面是什么。老向导说过——第二层，管道梦，热得像蒸笼，住着靠听觉捕猎的猎犬。那是这趟下探之旅，真正凶险的开始。上面这一层短暂的安宁，到此为止了。\n\n你握紧了铁梯冰凉的、被无数只手磨得发亮的扶手，深深吸了一口这一层最后的、相对干净的空气。\n\n然后，你把一只脚，探向了蒸汽笼罩的、未知的下方。",
+    choices:[
+      { t:"顺着铁梯，下到蒸腾的下一层", go:"L2_enter", cost:"↓ 下探" }
+    ]
+  },
+
+  /* ---------- Level 2 · 猎犬 · 神智检定 ---------- */
+  L2_enter:{
+    dep:2, level:"LEVEL 2", title:"管道梦",
+    onEnter:s=>{ s.san-=8; s.light-=10; },
+    text:"你顺着铁梯一节一节往下，湿热的气浪从下方汹涌地扑上来，还没到底，衬衫就已经黏在了背上。脚终于踩到实地，你回头望了一眼——上方仓库那点昏黄的光，已经被翻涌的白色蒸汽彻底吞没了。退路，没了。\n\n这里是 LEVEL 2——〔管道梦（Pipe Dreams）〕。\n\n无数粗细不一的金属管道，在昏暗中盘绕、交错、扭结，伸向所有你能看见和看不见的方向，像一头巨兽被剖开后、永远凝固在半空的血管与内脏。有的管道滚烫，赤红色的余温从表面蒸腾，接缝处「嘶嘶」地喷着白色的蒸汽，稍一靠近就烫得皮肤发疼；有的管道冰凉，通体凝着一层细密的水珠，缓慢地汇聚、滴落，在死寂里敲出清脆而孤独的回响。脚下是湿滑的金属格栅，你每走一步，都发出一声轻微却在空旷中被无限放大的「铛」。\n\n空气又湿又热，混着铁锈、机油和某种若有若无的、腥甜的气味——后来你会知道，那是这一层的居民留下的味道。管壁上，偶尔能看见前人用粉笔或刀子留下的痕迹：有的是箭头，有的是数字，还有一处，歪歪扭扭地刻着一行字：『慢一点。它们，比你想的，更近。』\n\n你还没走出几步，就听见了那个声音。\n\n从管道深处传来的，金属爪尖刮擦地面的声音。『咔。咔。咔。』一开始只有一个，接着是两个、三个、一片。成群，由远及近，节奏错落，却又诡异地朝着同一个方向汇聚——你的方向。\n\n是『猎犬（Hounds）』。后室里最凶残、最高效的群猎者。据探险者的记录，它们的身体像被拉长、扭曲过的犬类，四肢过长，脊背嶙峋，皮肤是一种病态的灰白。而它们的眼睛，早已在无数世代的黑暗里彻底退化，成了两个凹陷的、闭合的空穴——它们是彻底的瞎子。可正因为看不见，它们的【听觉】，进化得敏锐到令人绝望：任何一点异响，一次粗重的喘息，甚至……一次失控的、擂鼓般的心跳，都会像黑暗中骤然亮起的信号弹，把整个犬群，瞬间引到你面前。M.E.G. 的档案里写着，猎犬的猎杀成功率，接近百分之百——唯一的例外，是那些能把自己变得「绝对安静」的人。\n\n你必须无声地，穿过它们。\n\n可你低头看着自己的手——它正不受控制地，剧烈地发抖。你能听见自己的心脏，正一下比一下更响地，撞击着胸腔。那声音，在你自己听来，响得像一面擂动的鼓。而你知道，在这一层，心跳声，就是催命符。",
+    choices:[
+      { t:"深吸一口气，赤脚潜行过去", go:"L2_sneak", req:s=>s.san>=45, note:"你太恐慌了，腿在发软、呼吸紊乱——现在潜行必死", cost:"需神智≥45" },
+      { t:"喝一瓶杏仁水，逼自己冷静下来", go:"L2_calm", req:s=>s.water>0, note:"没有杏仁水了", cost:"耗 1 杏仁水" },
+      { t:"顾不了那么多，闭眼向前猛冲", go:"L2_rush" }
+    ]
+  },
+  L2_calm:{
+    dep:2, level:"LEVEL 2", title:"管道梦",
+    onEnter:s=>{ s.water--; s.san=Math.min(100,s.san+30); },
+    text:"你颤抖着拧开一瓶杏仁水的瓶盖，那声轻微的「咔哒」在你听来响得吓人。你仰起头，把冰凉的液体，一口气灌了下去。\n\n那味道很奇怪——像杏仁，又比杏仁多了一丝金属和花朵混合的、说不清的余韵，微苦，微甜，滑过干渴的喉咙，一路凉到胃里。\n\n然后，奇迹般地，那只无形的、一直死死攥着你心脏的手，松开了。\n\n狂跳的心脏，一下一下地慢了下来，重新找回了平稳的节奏。四肢里那股几乎要让你瘫软、让你想要放声尖叫着冲出去的恐惧，像退潮一样，从指尖、从脚底，一寸寸地褪了下去。你脑中那片被恐慌搅成一团浆糊的混乱，忽然澄澈了——澄澈得，前所未有。\n\n杏仁水的真正力量，从来不是治愈伤口，而是【让你重新变回你自己】：一个会思考、会观察、不会被本能的恐惧牵着鼻子走向死亡的人。\n\n在这份夺回的冷静里，你甚至注意到了之前被吓得完全忽略的细节：那些『猎犬』的巡逻路线，总是不自觉地绕开那些滚烫的、喷着蒸汽的赤红热管——它们的皮肤怕烫，也怕蒸汽扰乱它们赖以生存的听觉。而那一侧凝满水珠的冷水管，阴影深，声音闷，是整个管道迷宫里，最安静、也最安全的一条缝隙。\n\n你脱下鞋子，攥在手里，贴着冰凉的冷管，把呼吸压成一条几乎不存在的细线。\n\n准备好了。你告诉自己。一步，一步来。",
+    choices:[
+      { t:"贴着冷水管，一寸一寸潜行", go:"L2_sneak" }
+    ]
+  },
+  L2_sneak:{
+    dep:2, level:"LEVEL 2", title:"管道梦",
+    onEnter:s=>{ s.san-=6; },
+    text:"你赤着脚，踩上温热潮湿的金属格栅。\n\n第一步。金属的凉意透过脚掌直窜上来，你把整个身体的重量，极其缓慢地、一点点地卸上去，直到确认它不会发出任何声响，才敢迈出第二步。一步，一步，你把每一次落脚，都轻放成一片羽毛落地。\n\n『猎犬』群从几步之外掠过。\n\n你能闻到它们身上那股腥甜的气味，能看清它们嶙峋的脊背在蒸汽中起伏，能听见它们喉咙深处滚动着的、低沉而饥饿的咕噜声。它们瞎眼的头颅左右缓慢地摆动着，那两个凹陷的空穴对准过你所在的方向——你的整颗心脏在那一刻几乎停跳——然后又茫然地移开。它们在贪婪地搜寻着黑暗里的每一丝声响，而你，把自己活成了这片死寂本身。\n\n汗水顺着你的脊背，一滴，一滴地往下淌，痒得钻心，你却连擦一下都不敢。蒸汽一阵阵模糊了你的视线，热气烤得你几乎窒息。每一秒都被拉得无限漫长，漫长得像是要在这里，度过一整个余生。\n\n你贴着冷水管，屏住呼吸，从一头正低头嗅探地面的猎犬身侧，一寸一寸地绕过去。它的爪子，距你赤裸的脚趾，不到一掌宽。你甚至能感觉到它呼出的、带着腐肉气味的鼻息，拂过你的脚踝。\n\n你没有停。你不敢停。\n\n终于，隧道的尽头，出现了一扇锈蚀的铁门。你走到它面前，屏住这一路以来的最后一口气，用尽全身的温柔，无声地把它推开一道缝，闪身而入，又极轻极轻地，把它带上。\n\n「咔。」门锁扣合。\n\n门这一侧，猎犬的爪声、咕噜声、那股腥甜的气味，被彻底地隔绝在了另一个世界。你背靠着冰冷的铁门，缓缓滑坐到地上，这才发现自己早已浑身湿透，双腿抖得几乎站不起来。你大口大口地，贪婪地喘着气。\n\n你活着，过来了。这一次，是你自己的冷静，救了你。",
+    choices:[
+      { t:"稍作平复，继续往下一层", go:"L3_enter", cost:"↓ 下探" }
+    ]
+  },
+  L2_rush:{
+    dep:2, level:"LEVEL 2", title:"管道梦",
+    onEnter:s=>{ s.san-=30; },
+    text:"你的理智，被恐惧彻底冲垮了。\n\n什么冷管热管，什么潜行技巧，全都成了脑海里飞速旋转的、毫无意义的碎片。你只剩下一个最原始、最愚蠢、也最致命的念头：跑。离开这里。现在，立刻，马上。\n\n你闭上眼，凭着一股孤注一掷的蛮劲，向前猛冲。\n\n可你在最恐惧的那一刻，忘记了这一层最基本、也是唯一的规则——『猎犬』靠的从来不是眼睛，是【耳朵】。\n\n你的脚重重踏碎地上的积水，「哗啦」；你的肩膀撞响悬垂的空管，「哐当」；你粗重的、失控的喘息，在死寂里响得像一头受伤的野兽。这每一个声音，都成了黑暗中最清晰、最诱人的坐标，像一根根点燃的引线，瞬间引爆了整个管道迷宫。\n\n刹那间，四面八方的爪声炸开、汇聚、逼近，密集得连成一片。你甚至来不及看清，一头猎犬就已经从侧面狠狠撞进你的后腰。剧痛之下，你整个人向前扑倒，重重摔在滚烫的格栅上，皮肤传来「滋」的一声灼烧的剧痛。你还没来得及爬起，另几头已经压了上来，利齿冰凉地贴上了你的后颈——\n\n就在这千钧一发、你以为一切都要结束的刹那，你脚下的格栅，因为承受了太多重量、又锈蚀得太久，「哐当」一声，彻底塌陷了。\n\n地面消失了。\n\n你连人带犬，一起坠进了下方翻涌的、深不见底的黑暗里。失重中，你听见猎犬们愤怒而不甘的嚎叫，在头顶迅速远去。也许，这场意外的坠落，反而救了你一命——也许，只是把你从一个地狱，扔进了另一个。",
+    choices:[
+      { t:"在坠落中失去意识……", go:"L3_enter", cost:"↓ 坠落" }
+    ]
+  },
+});
+
+/* =========================================================
+   故事 · 第三批：Level 3 电气隧道 / Level 4 办公室（出口①）
+   ========================================================= */
+Object.assign(STORY, {
+  /* ---------- Level 3 · 黑暗 · 手电检定 ---------- */
+  L3_enter:{
+    dep:3, level:"LEVEL 3", title:"电气隧道",
+    onEnter:s=>{ s.san-=9; s.light-=18; },
+    text:"坠落的失重感还没散去，你就重重砸进了一片没过脚踝的冰水里，溅起的水花冰冷刺骨。你手脚并用地从水里爬起来，浑身发抖，牙齿不受控制地打颤。\n\n这里是 LEVEL 3。\n\n一条幽深的、看不到尽头的隧道，向着前后两个方向无限延伸。潮湿的混凝土墙壁上，爬满了裸露的、纠缠成团的电线，像一窝窝黑色的、僵死的蛇。它们中的一些还带着电，时不时「啪」地迸出一串幽蓝色的火花，在那短短的一瞬里，惨白地照亮四周——你能看见墙上斑驳的水渍、天花板垂落的断线、还有水面下那些说不清是什么的、黑乎乎的东西——然后，火花熄灭，一切又迅速沉回浓稠的黑暗。空气里弥漫着一股呛人的臭氧味，混着铁锈和霉烂的气息，还有一丝，若有若无的、焦糊的味道。\n\n你尽量不去想，那焦糊味，是从哪里来的。\n\n最要命的，是脚下。整条隧道积着没过脚踝的水，冰冷、浑浊、深浅不一。而那些从头顶垂落、从墙缝钻出的电线，谁也说不准，哪一根正泡在哪一摊水里。在这里，每往前迈一步，都是一场用性命下注的赌博：只要踩错一脚，踏进一摊恰好通着电的水，几万伏的电流就会顺着水、顺着你湿透的身体，在一瞬间把你变成一具还冒着青烟的、焦黑的雕塑。\n\n墙上，有一块被火花照亮时才看得清的、用防水漆刷的警示牌，字迹已经斑驳：『此层年死亡率，据统计，是所有已知浅层中，最高的。原因：过度自信，与，灯光不足。』\n\n你想起老向导的警告，下意识地去摸胸前的手电。那句话，此刻在你耳边，重若千钧：「没有足够的光，别下去。你会看不见脚下哪摊水在要你的命。」\n\n此刻，它的光，是你在这条死亡隧道里，唯一能依靠的东西。只有借着光，看清脚下水面细微的反光，看清哪几根电线垂进了水中、在接触点激起的、几不可见的涟漪——你才有可能，活着走到隧道的另一头。\n\n你按下开关，屏住呼吸，等待光柱亮起。而你比谁都清楚，它此刻还剩多少电——那个数字，可能，就是你活下去的，全部筹码。",
+    choices:[
+      { t:"举起手电，照亮脚下的每一步", go:"L3_lit", req:s=>s.light>=25, note:"手电电量太低了，光柱昏暗闪烁，根本照不清水面", cost:"需手电≥25%" },
+      { t:"灯不够亮，只能贴着墙摸黑挪过去", go:"L3_dark" }
+    ]
+  },
+  L3_lit:{
+    dep:3, level:"LEVEL 3", title:"电气隧道",
+    onEnter:s=>{ s.light-=15; s.san+=4; },
+    text:"你举起手电，「唰」的一声，一道雪亮而坚定的光柱刺破了浓稠的黑暗，稳稳地扫过脚下漆黑的水面。\n\n有了光，整个世界都不一样了。\n\n恐惧还在，但不再是那种令人瘫痪的、面对未知的恐惧了——它变成了一种高度专注的、可以掌控的紧张。你能清楚地看见水面上每一处细微的反光，能看见哪几根电线垂进了水里、在接触点激起一圈一圈几不可见的、致命的涟漪。你甚至能看见水底那些前人留下的东西：一只锈烂的工具箱，几根白森森的、你决定不去细看的东西。\n\n你像一个走钢丝的人，把全部的神经都集中在脚下，一步，一步，精准地绕开每一处死亡陷阱。这里的水浅一些，那里的电线是死的，前方三步有一摊泛着微光的水——绕开它。你在心里飞快地计算、判断、落脚，额头渗出细密的汗，可你的每一步，都踏得无比坚实。\n\n走到隧道中段，你在一个还在低鸣运转的老式配电箱旁，有了意外的发现：箱子上挂着一个前人留下的应急电源包，里面还有几节没用过的电池。你就着手电的光，飞快地给自己补充了电量——毕竟这一路走来，光柱也肉眼可见地黯淡了几分，而在后室，你永远不知道下一段黑暗会有多长、多深。\n\n配电箱的侧面，有人用粉笔潦草地写着一行字，已经被水汽晕开了大半：『光，是这里唯一的神。别让它熄灭。』\n\n隧道的尽头，一道干燥的楼梯，正向上延伸。楼梯口，透出办公室那种惨白、规整、熟悉得让人几乎要落泪的日光。你几乎是奔着那片光，跑了过去。",
+    choices:[
+      { t:"顺着楼梯，走向那片惨白的光", go:"L4_enter", cost:"↓ 下探" }
+    ]
+  },
+  L3_dark:{
+    dep:3, level:"LEVEL 3", title:"电气隧道",
+    onEnter:s=>{ s.san-=16; },
+    text:"手电的光昏黄而微弱，像风中残烛，闪烁了几下，几乎要彻底熄灭。\n\n你的心，沉到了谷底。你不敢再指望它——一盏随时会灭的灯，在这种地方，比没有灯更致命，因为它会给你虚假的安全感。你咬咬牙，把它塞回口袋，伸出双手，贴着湿冷、黏腻的墙壁，一寸一寸地，在近乎绝对的黑暗中，开始了摸索。\n\n看不见脚下，你只能用脚尖极其小心地向前试探，像一个骤然失明的人，在雷区里跳舞。每一步落下之前，你都要在心里默念一遍：这里有没有水？水里有没有线？你的心脏提到了嗓子眼，每一次呼吸都又浅又急。头顶的电线在黑暗中「滋滋」作响，偶尔迸出的火花，会短暂地照亮一小片惨白的墙，随即又是无边无际、吞噬一切的黑。\n\n那火花照亮的瞬间，你好几次觉得，自己看见了什么——水面下有影子在动，墙角有个佝偻的轮廓在看你。可当你屏息定睛，黑暗又什么都不肯给你。你分不清那是真实的实体，还是恐惧在你视网膜上投下的幻觉。在后室，这两者的界限，本来也就没那么清楚。\n\n忽然，你的脚踝，碰到了什么。\n\n还没等你反应过来，一道电流猛地窜过你的小腿，剧烈的、火烧火燎的痛楚让你闷哼一声，整个人向后重重栽倒进冰水里。你的头皮发麻，肌肉不受控制地抽搐。万幸——万幸那根电线只是擦到你，泡在水里的部分不多，电压不足以致命。\n\n你连滚带爬地逃离那摊要命的水，浑身抽搐着，衣服被冷汗和积水彻底浸透，冷得像是掉进了冰窟。你趴在相对干燥的一小片地面上，大口喘息了很久，才勉强站起来。\n\n前方，隐约透出一点惨白的光——是一道向上的楼梯。你几乎是手脚并用地，朝着那点光，爬了过去，像一个溺水的人，扑向岸边。",
+    choices:[
+      { t:"逃上楼梯，离开这个鬼地方", go:"L4_enter", cost:"↓ 下探" }
+    ]
+  },
+
+  /* ---------- Level 4 · 补给 + 出口① ---------- */
+  L4_enter:{
+    dep:4, level:"LEVEL 4", title:"废弃办公室",
+    onEnter:s=>{ s.san+=12; s.water+=1; },
+    text:"楼梯的尽头，是一整层一望无际的、废弃的办公室。\n\n你踏上最后一级台阶的瞬间，几乎要喜极而泣，双腿一软，扶着墙才没有跪下去。\n\n灰色的隔间挡板，一排排、一列列，向着看不见的远方延伸。贴满便利贴的显示器，早已断电的黑屏，转椅，饮水机，角落里一盆积了厚厚灰尘、却诡异地还活着的绿萝，还有那台熟悉的、印着某个早已倒闭的品牌的打印机……一切都熟悉得近乎荒谬，荒谬到让你产生一种眩晕的错觉——仿佛你只是加班到深夜，起身去接杯水，一不小心走错了一层楼，而只要你找到电梯下到一楼，推开旋转门，外面就还是那个有车流、有星光、有便利店的、真实的夜晚。\n\n这种「熟悉」，本身就是一种残忍。它精准地复刻了你逃离的那个世界的每一个细节——甚至复刻了那种，深夜办公室特有的、令人心头发空的寂静。你几乎能听见，某个隔间里，传来同事敲键盘的声音；能看见，茶水间的灯，为某个还在加班的人亮着。可你回头，那里什么都没有。只有无穷无尽的、自我重复的、空无一人的隔间。\n\n头顶的日光灯，温和地、均匀地亮着。没有那种钻进骨髓的霉味，没有嗡鸣声里潜藏的杀机，没有任何东西在黑暗里窥视你。这里是 LEVEL 4，探险者口中，穿越后室最深处那段炼狱前，最后、也最珍贵的一片「补给绿洲」。据说，很多走到这里的人，就再也不肯往下走了——他们宁愿在这片虚假的、却安全的办公室里，日复一日地整理着永远整理不完的文件，假装自己只是在加班，假装推开某扇门，就能回家。他们把这种自欺，当成了最后的庇护。\n\n你走到饮水机前，拧开龙头，接了满满一杯清水。水流出来的那一刻，你的眼眶热了。你一饮而尽，冰凉的水滑过喉咙，冲刷掉一路的血腥、恐惧和绝望。你又在几个抽屉里翻找，竟真的翻出几包没有拆封的饼干，你撕开包装，狼吞虎咽，噎住了就再灌一口水。神经紧绷了太久太久，此刻，你终于能真正地、长长地，松一口气。\n\n吃饱喝足，你才有心思打量四周。角落里，一台老电脑的屏幕，还幽幽地亮着，上面似乎开着一份没有关闭的文档。而在办公室的另一头，一个隔间的挡板上，你瞥见了一张被人遗落在那里的、褪了色的相框。\n\n两样东西。一样，或许指向回家的路。另一样，你还不知道，它会成为你在这地狱最深处，唯一的、也是最重要的，锚。",
+    choices:[
+      { t:"走过去，看看那台电脑上的文档", go:"L4_pc" },
+      { t:"去看看那个褪色的相框", go:"L4_photo", hidden:s=>s.flags.photo },
+      { t:"翻找隔间，找找别的幸存者痕迹", go:"L4_cubicle", hidden:s=>s.flags.l4cube }
+    ]
+  },
+  L4_photo:{
+    dep:4, level:"LEVEL 4", title:"废弃办公室",
+    onEnter:s=>{ s.flags.photo=true; s.san+=6; },
+    text:"你走到办公室另一头那个隔间，拿起了挡板上那个褪色的相框。\n\n玻璃上蒙着一层厚厚的灰。你用袖子轻轻擦开，里面渐渐显出一张再普通不过的〔全家福〕——一对年轻的父母，站在后排，一个约莫七八岁的男孩咧嘴笑着露出缺了的门牙，父亲怀里还抱着一个更小的、正伸手去够什么的女婴。他们身后是一栋普通的房子，门前有棵树，阳光很好，好得能让人闻到照片里那个夏日午后，青草和晒热的柏油路的味道。\n\n他们笑得那样毫无防备，那样理所当然地幸福，仿佛这世上从不存在什么后室，从不存在什么会把人吞掉的黑暗和无限。\n\n照片的背面，用已经褪色的圆珠笔，写着一行字：\n\n『无论走到多深的地方，记得我们在等你回家。』\n\n你不认识照片里的任何一个人。你甚至不知道他们后来怎么样了——那个写下这行字的人，是回到了这个家，还是永远留在了下面的某一层。\n\n可不知道为什么，看着这行字，你的鼻子猛地一酸，眼眶毫无预兆地热了，一滴眼泪砸在了积灰的玻璃上。你想起了自己的家，那个你嫌它乏味、嫌它拥挤、常常晚归、有时甚至懒得回去的家。你想起了那些你以为理所当然、以为永远都会在那里等着你的面孔。\n\n你把这张全家福，从相框里取出来，极其小心地，贴身收进了胸前的口袋里。\n\n在这个不断磨损你、稀释你、想把你变成一个没有脸也没有记忆的空壳的世界里，它像一枚小小的、沉甸甸的锚，牢牢地拽住了你，一遍遍地提醒着你：你不是这里的一部分。你有一个名字，有一段过去，有一个，无论多远都要回去的地方。\n\n（你获得了一件信物：全家福。据说，唯有心里还牢牢记着「家」是什么的人，才能在后室的最深处，推开那扇真正的归途之门。）",
+    choices:[
+      { t:"回去看电脑上的文档", go:"L4_pc" },
+      { t:"翻找一下其他隔间", go:"L4_cubicle", hidden:s=>s.flags.l4cube }
+    ]
+  },
+  L4_cubicle:{
+    dep:4, level:"LEVEL 4", title:"废弃办公室",
+    onEnter:s=>{ s.flags.l4cube=true; s.water+=1; s.light=Math.min(100,s.light+30); },
+    text:"你决定在离开这片绿洲之前，把每个隔间都仔细翻一遍。补给，在下面就是命。\n\n大多数隔间空空如也，只有蒙尘的办公用品和一些早已风化、字迹模糊的文件。但在角落一个靠墙的工位上，你有了收获：半瓶还没喝完的杏仁水，一节用锡纸仔细包好的备用电池，你都如获至宝地收了起来。工位的抽屉里，还压着一本被翻得卷了边、封皮都快掉了的笔记本。\n\n你翻开它。前面几十页，是密密麻麻的观察记录、地图草图、对各层实体习性的分析，笔迹工整而理性，像一个严谨的学者。可越往后翻，那字迹就越是潦草、越是颤抖、越是充满了一种压抑不住的绝望——\n\n『第 47 天。今天又有两个人没能从下面回来。我们只剩五个人了。』\n\n『第 89 天。杏仁水快没了。我开始记不清女儿的脸了。我努力去想，可她的样子，像隔着一层毛玻璃。这比任何实体都让我害怕。』\n\n『第 112 天。我数过了，这一层，至少有一万个隔间。我给每一个都编了号，从 A-0001 到……我数不下去了。饮水机的水，越来越没有味道了，或者是我，尝不出味道了。』\n\n笔记的最后一页，字迹已经溃散得几乎无法辨认，被反复描粗、几乎划破纸背：\n\n『如果你看到这行字——记住，回家的门，要按【三台】打印机。是三台。不是四台。\n\n那第四台……它不是打印机。它会给你看你最想看的东西。别过去。求你了，别过去。别像我一样，忍不住。』\n\n后面，没有了。",
+    choices:[
+      { t:"去看看那台亮着的电脑", go:"L4_pc" }
+    ]
+  },
+  L4_pc:{
+    dep:4, level:"LEVEL 4", title:"废弃办公室",
+    text:"你在那台亮着的电脑前坐下，转椅发出熟悉的、令人安心的「吱呀」声。\n\n屏幕上，是一份没有关闭的文档，标题用加粗的黑体，赫然写着——《回归协议 v3》。\n\n你的呼吸一滞，凑近屏幕，一字一句地读了下去：\n\n『致每一个读到这份文档的、还没有放弃的人：\n\n经本站数十名探险者，以生命为代价，反复验证——在本层（LEVEL 4），依次按下【三台】打印机的电源键，即可在办公室中央，触发一扇〔回归门〕。它会直接、稳定地，将你送回现实世界。\n\n顺序无所谓。位置无所谓。数量，是唯一的关键。\n\n只按三台。一台不多，一台不少。』\n\n文档写到这里，字体是工整的宋体。可就在这段话的末尾，有人用另一种笔迹——一种颤抖的、狂乱的、几乎要戳破屏幕的红色批注字体，补上了一行触目惊心的大字：\n\n【别相信第四台打印机。它不是打印机。它在模仿。它一直在等一个，忍不住好奇的人。】\n\n你缓缓靠回椅背，长长地吐出一口气。\n\n回家的机会，就这样毫无预兆地、真真切切地，摆在了你的眼前。三台打印机，几步路，一扇门，然后就是你熟悉的床、熟悉的窗、熟悉的、乏味又安稳的生活。\n\n可老向导那句话，也在这时候，固执地在你耳边响了起来：「越深的地方，藏着越干净的出口，能把人送回真正想回去的地方……」\n\n你摸了摸胸口。\n\n这是一个岔路口。一边，是唾手可得的、平庸的归途；另一边，是九死一生的、未知的深渊，和深渊尽头那个，或许根本不存在的、更好的答案。\n\n你要，怎么选？",
+    choices:[
+      { t:"按下三台打印机，从这里回家", go:"E_home_printer" },
+      { t:"好奇心作祟，去看看那「第四台」", go:"E_funhouse" },
+      { t:"暂时不回去——赌更深处更好的结局", go:"L4_down" }
+    ]
+  },
+  L4_down:{
+    dep:4, level:"LEVEL 4", title:"废弃办公室",
+    onEnter:s=>{ s.san-=4; },
+    text:"你的手，最终没有伸向那三台打印机。\n\n不是不想回家。天知道，从跌进这个鬼地方的第一秒起，你有多想回家。想到发疯，想到流泪，想到愿意用任何东西去交换。\n\n可就在你快要按下去的那一刻，有一个念头，像一根细小却尖锐的刺，猝不及防地扎进了你的心里，让你的手，僵在了半空：\n\n如果……如果这扇门，只是把你原封不动地送回那种「加班到晚上十一点、对着第七版报表叹气、连一支掉在地上的笔都要蹲下去、疲惫地捡起来」的生活——那它，真的算是「回家」吗？\n\n你想起掉下来之前的那个自己。那个麻木的、被日程表和 deadline 追着跑的、很久很久没有真正为什么事情心动过的自己。你花了那么大力气，穿过猎犬，穿过黑暗，穿过冰水，难道就是为了，回到那种连活着都像是在梦游的日子里去吗？\n\n你想赌一把。\n\n赌传说里那个更深、更干净的出口；赌深渊的尽头，真的藏着一个能把你送回「真正想回去的地方」的答案；赌自己，能活着抵达那里。\n\n你站起身，深吸一口气，穿过一排又一排沉默的、灰色的隔间，走向办公室最尽头。那里，有一扇你之前没有注意到的、挂着黄铜门牌的双开门，牌子上，是两个已经氧化发黑的英文单词——『BALLROOM』（舞厅）。\n\n你伸手，握住了冰凉的门把手。一股奢靡、陈腐、混着劣质香水与陈年灰尘的气息，从门缝里，丝丝缕缕地渗了出来。",
+    choices:[
+      { t:"走进那扇金色的门", go:"L5_enter", cost:"↓ 下探" }
+    ]
+  },
+});
+
+/* =========================================================
+   故事 · 第四批：Level 5 恐怖酒店 / Level 6 无光之地
+   ========================================================= */
+Object.assign(STORY, {
+  /* ---------- Level 5 · 偷皮者 · 神智检定 ---------- */
+  L5_enter:{
+    dep:5, level:"LEVEL 5", title:"恐怖酒店",
+    onEnter:s=>{ s.san-=10; s.light-=8; },
+    text:"门在你身后「哐」地合拢，隔绝了办公室那片惨白而安全的光。\n\n门后，是一座极尽奢华的酒店。\n\n鎏金的巨型吊灯从高不见顶的穹顶垂下，成千上万颗水晶折射出昏黄而暧昧的光点。猩红色的地毯，厚得能陷进脚踝，一直铺向走廊看不见的尽头。墙上，间隔挂着描金的巨大镜子和一幅幅早已模糊、看不清画的是什么的油画。空气里，飘着一股陈旧香水、腐烂木料和积年灰尘混合在一起的、甜腻得发腻、腻得发腐的气味。这里是 LEVEL 5——〔恐怖酒店（Terror Hotel）〕。\n\n可越是华美，那股「哪里不对劲」的错位感，就越是像一股冰水，顺着你的脊背，一节一节地往下爬。\n\n这里的回廊，无限延伸，两侧是一模一样的房门，一样的门牌号，一样的黄铜把手，一样的、门缝里透出的、若有若无的光。你走了几步，回头，发现来时的门已经消失了，取而代之的是又一扇一模一样的客房门。你甚至说不清自己是在几楼——这里似乎，根本就没有「楼层」这个概念，只有无穷无尽的、自我重复的走廊。\n\n那些镜子，你尽量不去看它们。因为有那么一两次，你用余光瞥见，镜子里映出的走廊，似乎和你所在的这条，不太一样。\n\n走廊尽头，一部老式的、镶着黄铜雕花的电梯，「叮」的一声，铜门缓缓地、无人操作地，自动打开了。里面空无一人，暖黄色的灯光温柔地亮着，像一种沉默的、耐心的邀请。\n\n而就在你身旁，一扇客房的门，虚掩着。门缝里，透出镜子反射的、一小片晃动的微光。",
+    choices:[
+      { t:"推开那扇虚掩的客房门看看", go:"L5_room" },
+      { t:"走进那部自动打开的电梯", go:"E_elevator" },
+      { t:"两个都不碰，去找往下的楼梯", go:"L5_stairs" }
+    ]
+  },
+  L5_room:{
+    dep:5, level:"LEVEL 5", title:"恐怖酒店",
+    onEnter:s=>{ s.san-=12; },
+    text:"你伸手，推开了那扇虚掩的客房门。\n\n房间的陈设考究得一丝不苟：铺得平整光洁、连一丝褶皱都没有的大床，擦得能照出人影的穿衣镜，衣架上，挂着一套熨帖得体、仿佛正等着主人来穿的深色西装。一切都太完美了，完美得像一个精心布置的、等待猎物走进来的舞台。\n\n你的目光，不由自主地，落在了那面穿衣镜上。\n\n镜中，映出你自己的样子——狼狈，疲惫，惊恐，衣衫褴褛。你站定，不动。\n\n可就在你静止的这一刻，镜子里的那个「你」，却慢了半拍。\n\n它的嘴角，正在一点点、一点点地，向上扯起，扬出一个诡异的、僵硬的、你从未做过、也永远不会做出的笑容。那笑容越咧越大，越咧越大，直到超出了人类面部肌肉能达到的极限，露出里面森然的、过多的牙齿。而它的眼睛，依旧空洞地、直勾勾地，「看」着镜子外面的你。\n\n与此同时，床上那套西装，动了。\n\n它没有身体，衣料却像被一双看不见的手从内部撑起，缓缓地、无声地「坐」了起来，然后「站」了起来。空荡荡的领口，直直地对准了你的脸，微微前倾，仿佛正准备把你整个人，从那个开口，缓缓地【穿上身】。\n\n这是『偷皮者（Skin-Stealer）』。后室里最令人毛骨悚然的实体之一。它没有自己的样貌，没有自己的皮囊，于是它永恒地、贪婪地，渴望着一张真正的脸，一副真正的、活人的身体。而现在，在这个精心布置的房间里，它盯上了你的。\n\n你的心脏疯狂地擂动，肾上腺素冲上头顶。你必须，立刻，做出反应——\n\n可你还剩下多少清醒，能让你分清哪个才是真正的自己，能让你的双腿听从大脑的指挥，逃出这个房间？",
+    choices:[
+      { t:"识破幻象，抄起台灯砸碎镜子夺门而出", go:"L5_escape", req:s=>s.san>=35, note:"你的意识已经太涣散，分不清镜里镜外，双脚像灌了铅一样动不了", cost:"需神智≥35" },
+      { t:"神志恍惚，怔怔地望着镜中的自己……", go:"E_skinstealer" }
+    ]
+  },
+  L5_escape:{
+    dep:5, level:"LEVEL 5", title:"恐怖酒店",
+    onEnter:s=>{ s.san-=6; },
+    text:"电光石火之间，你死死地咬住了自己的舌尖。\n\n一阵尖锐的、真实的剧痛，混着口腔里泛起的血腥味，猛地把你从那种黏稠的、致命的恍惚里，拽了回来——\n\n那不是你。镜子里那个咧着嘴的东西，不是你！你是会疼的，你是会流血的，你是那个还揣着一张全家福、拼了命想要回家的、活生生的人！\n\n清醒回归的刹那，你没有丝毫犹豫。你一把抄起床头柜上那盏沉重的铜制台灯，用尽全身的力气，狠狠地砸向那面镜子。\n\n「哗啦——！」\n\n一声巨响，镜面碎成漫天飞溅的、银色的碎片，在昏黄的灯光下，像一场绝望的、闪亮的雨。那个扭曲的、咧到极限的笑容，连同镜子背后那道无形的、贪婪的注视，被砸得四分五裂，碎片落地的叮当声里，夹杂着一声不属于任何生物的、漏气般的、充满了不甘的嘶鸣。\n\n身后，那套悬空的西装，像被抽走了支撑，「啪」地一声，软软地跌回床上，重新变回一堆没有生命的衣料。\n\n你不敢回头，一秒都不敢停留。你转身冲出房间，在那无限重复的猩红回廊里，发了疯一样地狂奔，撞开一扇又一扇一模一样的门，拐过一个又一个一模一样的弯，直到肺像要炸开，直到再也听不见那声嘶鸣。\n\n跌跌撞撞中，你终于撞开了一扇与众不同的、标着白色『STAIRS』字样的铁门，头也不回地，冲进了向下的、冰冷的楼梯间。",
+    choices:[
+      { t:"沿着楼梯继续往下逃", go:"L5_stairs" }
+    ]
+  },
+  L5_stairs:{
+    dep:5, level:"LEVEL 5", title:"恐怖酒店",
+    onEnter:s=>{ s.san-=5; },
+    text:"你踏上宽阔的大理石楼梯，扶着冰凉的、雕着繁复花纹的栏杆，一层，又一层地，向下走去。\n\n奇怪的事情发生了。无论你走了多久，无论你数过了多少级台阶、拐过了多少个平台，墙上那块标示楼层的黄铜数字牌，永远显示着同一个数字。你停下来，盯着它看，甚至伸手摸了摸，确认自己没有看错。可当你再往下走一段，下一个平台的数字牌上，还是那个数。\n\n你仿佛在原地踏步。又仿佛，整座酒店，都在随着你的脚步，一起，缓缓地，向着地心，无声地下沉。\n\n楼梯间里，那股甜腻的腐香渐渐淡了，取而代之的，是一种越来越浓的、地窖般的阴冷潮湿。墙上的鎏金装饰，也一点点变得斑驳、剥落，猩红的地毯褪成了暗沉的血褐色。\n\n就在你快要被这无尽的、令人发狂的循环逼疯，快要怀疑自己是不是要在这座楼梯里走到永远的时候——\n\n某一段楼梯的尽头，不再是熟悉的、猩红的回廊。\n\n而是一片纯粹的、浓稠的、仿佛有实体的【漆黑】。\n\n那黑暗，像一头蛰伏的巨兽，安静地盘踞在楼梯的底部。它不反射任何光线，连楼梯间那本就昏暗的灯光，靠近它时都仿佛被无声地吞掉了，在明与暗之间，划出一道刀切般清晰的边界。一股冰凉的、地窖深处的、带着某种古老气息的空气，从那片黑暗里，缓缓地、绵长地，渗了出来，拂过你的脚踝。\n\n你知道，下一层，到了。而且，是老向导反复警告过的、最不该去、也最难活着离开的那一层之一。",
+    choices:[
+      { t:"深吸一口气，走进那片彻底的黑暗", go:"L6_enter", cost:"↓ 下探" }
+    ]
+  },
+
+  /* ---------- Level 6 · 无光之地 · 忍住不开灯 ---------- */
+  L6_enter:{
+    dep:6, level:"LEVEL 6", title:"无光之地",
+    onEnter:s=>{ s.san-=18; },
+    text:"你迈进那片黑暗。\n\n脚下的大理石台阶，不知何时，变成了粗糙冰冷的水泥地面。而在你身后，楼梯间那最后一丝微光，也彻底地、干净地，消失了。\n\n这不是普通的暗。\n\n你在夜里关灯睡觉时经历过暗，你在停电的地下室经历过暗，可那些都不是这个。这是 LEVEL 6——〔无光之地〕，一片被绝对的、纯粹的、有实体般重量的黑暗，彻底填满的虚无。\n\n你伸出手，放在离眼睛不到一寸的地方——什么都看不见。你睁开眼，闭上眼，再睁开——没有任何区别，视野里是同一片深不见底的墨黑。你甚至开始怀疑，自己的眼睛，是不是还长在脸上，是不是已经在不知不觉中，被这黑暗溶解掉了。上，下，左，右，远，近——所有的方向，所有的概念，在这里全部失去了意义。你像一粒尘埃，悬浮在一片没有坐标的、永恒的虚空里。\n\n你想起老向导反复强调、几乎是含着某种恐惧说出的、这一层唯一的铁律：\n\n【无论多黑，多冷，多怕，绝对不能开灯。】\n\n因为这片黑暗里，游荡着某种以「光」为食的东西。它们平时茫然地、无害地漂浮着，因为在绝对的黑暗里，它们和你一样，什么都「看」不见。可只要有一束光亮起——哪怕只是一瞬，哪怕只是一颗火星——它们就会像闻到血腥的鲨鱼，从四面八方，瞬间循光而至。\n\n你的手电，就攥在手里。开关，就在你的拇指下方，触手可及。\n\n而黑暗，正以一种令人窒息的、缓慢增加的重量，从四面八方，一寸寸地，压向你。你的呼吸开始急促，冷汗浸透了后背。有一个念头，开始在你的脑海深处，疯狂地、一遍遍地尖叫起来：\n\n开灯。就一秒。就看一眼周围。求你了，就一眼，我受不了了……",
+    choices:[
+      { t:"死死掐住那个念头，靠触觉贴墙摸索", go:"L6_grope", req:s=>s.san>=30, note:"你濒临崩溃，理智快要守不住了，那个「开灯」的念头正在吞掉你", cost:"需神智≥30" },
+      { t:"先喝口杏仁水，压下开灯的冲动", go:"L6_calm", req:s=>s.water>0, note:"没有杏仁水了", cost:"耗 1 杏仁水" },
+      { t:"实在受不了了……按下手电开关", go:"E_lightsout" }
+    ]
+  },
+  L6_calm:{
+    dep:6, level:"LEVEL 6", title:"无光之地",
+    onEnter:s=>{ s.water--; s.san=Math.min(100,s.san+28); },
+    text:"你在绝对的黑暗中，摸索着，颤抖着，拧开了一瓶杏仁水的盖子。\n\n你甚至看不见瓶口在哪里，只能凭着感觉，把它送到唇边，小心翼翼地，一口口喝下，生怕在黑暗里洒了这救命的一滴。\n\n熟悉的、冰凉微苦的味道，在口腔里蔓延开来。\n\n然后，那个在你脑海里疯狂尖叫着「开灯！开灯！就一秒！」的念头，被一点一点地，按了下去。它的声音越来越小，越来越远，从一声歇斯底里的尖叫，变成一句微弱的、可以忽略不计的耳语，最后，彻底沉寂了。你重新夺回了对自己身体、对自己意志的控制权。你的拇指，离开了那个危险的开关。\n\n为了彻底断了这个念想，你做了一件需要极大勇气的事：你把手电，从口袋里掏出来，塞进背包的最底层，又用换下的、湿透的外套，死死地压在上面。现在，就算你一时糊涂想开灯，也得先手忙脚乱地翻找半天——这点时间差，也许就能救你一命。\n\n你把自己交给了黑暗。你张开双臂，深吸一口气，让指尖成为你唯一的眼睛。",
+    choices:[
+      { t:"贴着墙，在绝对的黑暗中摸索前进", go:"L6_grope" }
+    ]
+  },
+  L6_grope:{
+    dep:6, level:"LEVEL 6", title:"无光之地",
+    onEnter:s=>{ s.san-=10; },
+    text:"你死死地掐住了那个尖叫着「开灯」的念头，把它按进意识的最深处，用尽全部的意志力，压住颤抖的、几乎要不受控制地摸向开关的拇指。\n\n然后，你张开双臂，把全部的信任，都交给了指尖。\n\n你贴着那面湿冷、黏腻、说不清是什么材质的墙壁，一寸，一寸地，向前挪动。你不敢迈大步，每一次移动，都先用手确认前方没有障碍、没有断崖，再把脚极其缓慢地探出去。你成了一个盲人，在一个连盲人都会感到恐惧的世界里，独自前行。\n\n就在这时，你听见了它们。\n\n【无数细碎的呼吸声。】\n\n就在你的四周，近得能感觉到那一丝丝气流，拂过你的脸颊、你的脖颈、你的手背。有什么东西，很多东西，正在你身边缓慢地游移、逡巡、盘旋。你能感觉到它们的存在——它们庞大，它们饥饿，它们古老。可它们，「看」不见你。因为没有光，你和它们，都只是这片黑暗里，平等的、盲目的漂浮物。你和死亡之间，只隔着一层薄薄的、脆弱的、随时可能被一束光戳破的黑暗。\n\n你屏住呼吸，不敢发出任何声音，甚至强迫自己的呼吸放到最缓、最轻。有一次，一个庞大的、温热的什么东西，贴着你的背，极其缓慢地飘了过去，你能感觉到它的「体温」，能闻到它身上那股深海般的腥气。你僵在原地，闭着眼（尽管睁闭并无区别），在心里默数着，直到那股气息，彻底远去。\n\n你就这样，在死亡的缝隙里，走了不知多久。久到你几乎绝望地以为，这片黑暗，也和上面的黄色房间一样，是无限的，是没有尽头的，你将永远这样摸索下去，直到自己也变成这黑暗里，又一个盲目的、饥饿的漂浮物。\n\n然后，你的指尖，触到了一个冰冷的、圆形的、带着锈迹的金属物——像是一扇船舱的舱门，中央有一个可以转动的转盘。\n\n你的心跳漏了一拍。你屏住呼吸，用尽全力，缓缓地转动它。\n\n「咔——」的一声轻响。一线灰蓝色的、稀薄的微光，从门缝里，怯生生地渗了进来。\n\n那是你数个小时以来，见到的第一缕光。你几乎要因为这久违的光明而落泪。门后，是一片望不到边际的、雾气弥漫的、铅灰色的海。",
+    choices:[
+      { t:"推开舱门，走向那片微光与海", go:"L7_enter", cost:"↓ 下探" }
+    ]
+  },
+});
+
+/* =========================================================
+   故事 · 第五批：Level 7 海洋 / Level 8 洞穴 / Level 9 郊区 / Level Fun
+   ========================================================= */
+Object.assign(STORY, {
+  /* ---------- Level 7 · 海洋 · 出口② ---------- */
+  L7_enter:{
+    dep:7, level:"LEVEL 7", title:"无限海洋",
+    onEnter:s=>{ s.san-=8; s.light-=10; },
+    text:"身后那扇沉重的舱门，「哐」地合拢，转盘自动锁死。你回不去了。\n\n你站在一片湿冷的、覆满黑色藻类的礁石上，眼前展开的，是 LEVEL 7——一片没有尽头的、墨黑色的海洋。\n\n浓重的雾气，贴着水面翻涌、流动，能见度不过十几米。雾的上方，是一片毫无生气的、铅灰色的「天空」——你说不清那到底是不是天空，因为你找不到任何光源，那灰白的光，仿佛是从空气本身里，均匀地渗出来的。海水冰冷刺骨，深不见底，一层层缓慢地、永恒地、催眠般地，拍打着你脚下的礁石，发出「哗……哗……」的声音，那声音里有一种巨大的、古老的、令人心安又令人心悸的孤独。\n\n除了水，还是水。四面八方，直到雾与海连成一线、再也分不清彼此的地方。\n\n你几乎要在这片无边的死寂与孤独里，彻底绝望——就在这时，你看见了。\n\n远处的迷雾深处，一座孤零零的建筑，静静地矗立在一块突出海面的巨大礁石之上。那是探险者口中口耳相传的〔岩上之屋（The House on the Rock）〕。而它的窗户里，竟然，透出了一点温暖的、橘黄色的、家一般的灯光——在这片死寂的黑海与灰雾之间，那点光，像一个几乎令人落泪的承诺。\n\n而在更远、更淡、几乎要被浓雾完全吞没的地方，还隐约矗立着一座高塔的、模糊的轮廓。塔顶，有一束光，正一圈，一圈，极其缓慢地，扫过这片死寂的海面——那是一座灯塔。它的光每一次扫过你，都像有人在这无边的孤独里，轻轻地，看了你一眼。",
+    choices:[
+      { t:"朝着那扇亮灯的窗，游向岩上之屋", go:"E_house" },
+      { t:"游向更远的那座灯塔", go:"E_lighthouse" },
+      { t:"沿着礁石，找找有没有别的岸", go:"L9_enter" },
+      { t:"潜入水下——传说海底藏着通往更深处的路", go:"L7_dive" }
+    ]
+  },
+  L7_dive:{
+    dep:7, level:"LEVEL 7", title:"无限海洋",
+    onEnter:s=>{ s.san-=6; },
+    text:"你不甘心。\n\n岩上之屋的庇护也好，灯塔的守望也好，那都不是「回家」。那只是在后室里，找了一个更舒服的角落，住下来，然后慢慢地遗忘自己，遗忘那个还在等你回去的世界。你没有穿过猎犬、穿过黑暗、穿过冰水，只是为了在这片海上，换一个地方，安静地消失。\n\n传说里，这片无限海洋的海底，藏着通往后室更深处的暗道。而越深的地方，才有越干净、越真实的出口。\n\n你站在礁石的边缘，望着脚下那片深不见底的、墨黑色的海水。它像一张沉默的巨口。\n\n你深吸一口气——一口，两口，三口，尽可能地把肺撑满——然后，一头扎进了冰冷刺骨的黑水里。\n\n寒冷像千万根针，瞬间扎遍你的全身。你奋力向下划动，越潜越深。水温越来越低，四周的光线越来越稀薄，那点从水面渗下来的灰白，很快就被浓稠的、蓝黑色的幽暗，彻底吞没了。你的耳膜被越来越大的水压，挤压得生疼，像是随时会破裂。你的肺，开始灼烧，那点憋着的空气，正在飞快地耗尽，身体的每一个细胞都在尖叫着，命令你立刻上浮、呼吸。\n\n就在你几乎以为，这下面除了无尽的深渊、除了你即将溺毙的命运，什么都没有的时候——\n\n你看见了。\n\n在更深处，幽暗的海床上，有一道透着微光的裂隙，狭长，幽蓝，像一张微微张开的、正在低语的嘴。\n\n那就是入口。就在那里。\n\n可你的空气，也几乎，在同一时刻，耗尽了。你的意识，开始因为缺氧，而一阵阵地发白、涣散。",
+    choices:[
+      { t:"拼尽全力，游进那道海底裂隙", go:"L8_enter", req:s=>s.san>=25, note:"你的意识开始涣散，四肢不听使唤，再潜下去就再也浮不起来了", cost:"↓ 下探 · 需神智≥25" },
+      { t:"体力不支，放弃深潜……", go:"E_deep" }
+    ]
+  },
+
+  /* ---------- Level 8 · 洞穴 · 死亡鼠 ---------- */
+  L8_enter:{
+    dep:8, level:"LEVEL 8", title:"洞穴系统",
+    onEnter:s=>{ s.san-=12; s.light-=15; },
+    text:"你从那道海底裂隙里挣扎着钻出，一股力量猛地将你向上、向前抛去——然后，你重重地跌落在一片干燥、粗粝的岩石地面上。\n\n你剧烈地咳嗽起来，把呛进肺里、灌进胃里的冰冷海水，一口一口地全吐了出来，吐得撕心裂肺，眼泪鼻涕糊了一脸。可你活着。你竟然，真的，穿过了那片无限海洋的海底。\n\n你趴在地上，大口大口地贪婪呼吸着，过了好一会儿，才勉强撑起身子，环顾四周。\n\n这里是 LEVEL 8——一片望不到尽头的、庞大的地下洞穴系统。\n\n粗粝嶙峋的岩壁，向着四面八方延伸、分岔，形成无数条幽深的甬道。头顶，倒悬着密密麻麻、大小不一的钟乳石，尖端缓慢地凝聚着水珠，一滴，一滴，坠落在下方的石笋上、水洼里，发出「嗒……嗒……」的、在空旷中被无限放大的回响。你每一次呼吸，每一次挪动，都会在这片巨大的地下空间里，激起悠远而空洞的回声，仿佛这洞穴，是一头沉睡巨兽的、正在缓缓起伏的胸腔。空气里，弥漫着一股潮湿的泥土味，和一股浓重的、动物巢穴般的腥膻气味。\n\n你打开手电，微弱的光柱扫过岩壁——然后，你的心跳漏了一拍。岩壁上，有前人用凿子、用刀、甚至用指甲，一下一下刻出来的箭头。一个，接着一个，排成一列，固执地指向洞穴更深、更黑的地方，仿佛在指引一条，通往更下层的、唯一的生路。\n\n可就在这时，那股腥膻味的源头，从黑暗的深处，传来了声音——\n\n【无数细小的爪子，疯狂刨挖岩石的声音。】\n\n密集，急促，铺天盖地，像一场骤然降临的暴雨，正在以惊人的速度，向你逼近。你知道那是什么。那是『死亡鼠（Death Rats）』的鼠群——一种能在几秒钟内，把一头活牛、一个活人，啃食成一具白森森骨架的、后室里最贪婪的清道夫。",
+    choices:[
+      { t:"顺着前人的箭头，不管不顾冲向深处", go:"L8_deep", req:s=>s.san>=30, note:"你已经怕得迈不开腿，鼠群的声音让你的理智彻底瓦解", cost:"↓ 下探 · 需神智≥30" },
+      { t:"惊慌之下，转身逃向来时的方向", go:"E_ratswarm" },
+      { t:"熄灭手电，屏住呼吸让鼠群从身边过去", go:"E_cavein" }
+    ]
+  },
+  L8_deep:{
+    dep:8, level:"LEVEL 8", title:"洞穴系统",
+    onEnter:s=>{ s.san-=8; s.light-=10; },
+    text:"你压下几乎要冲破胸膛的心跳，咬紧牙关，把恐惧死死地摁在脚底，然后，沿着前人凿刻的箭头，不管不顾地，朝着洞穴深处，狂奔起来。\n\n身后，那片黑暗，「活」了。\n\n成千上万只『死亡鼠』，如同一片决堤的、黑色的潮水，从甬道深处汹涌而出，覆盖了岩壁、地面、甚至倒挂在钟乳石上。密集到令人头皮发麻的、尖锐的「吱吱」声，汇成一片实质般的声浪，几乎要刺破你的耳膜，从你身后紧紧追赶。你甚至能感觉到，最前排那些鼠爪，扫过你脚跟的、冰冷的触感。\n\n你不敢回头，你的世界里只剩下一件事：跑。跟着箭头，跑。\n\n那些前人留下的箭头，此刻成了你唯一的、也是最后的救命稻草。它们引着你，钻过一道又一道狭窄的、仅容一人侧身通过的岩缝——你这才明白那些开凿者的智慧：这些缝隙，恰好窄到，让庞大的、依赖数量优势的鼠群，难以成群地、迅速地通过。每钻过一道缝，身后的声浪，就被削弱、被甩远一分。\n\n渐渐地，那片黑色的潮水，被远远地抛在了后面，「吱吱」声也终于低了下去、远了。你冲进一个豁然开朗的、巨大的岩洞，双手撑着膝盖，剧烈地喘息，肺里像灌满了火。\n\n然后，你抬起头，看见了它。\n\n岩洞的正中央，赫然矗立着一道，由整块巨石凿成的、高达数米的石门。门上，从上到下，刻满了你完全看不懂的、古老而繁复的符号——那不是任何一种人类的文字，那些线条扭曲、盘绕，看久了会让你感到一阵眩晕。而在那紧闭的门缝里，透出一种，你从未在后室任何一层见过的光：柔和的、温暖的、乳白色的光。\n\n那不是荧光灯的惨白，不是火焰的橘黄，不是海面的铅灰。那是一种……更深、更古老、更接近某种「本源」的光。\n\n最深处，到了。",
+    choices:[
+      { t:"推开这道刻满符号的石门，走向最深处", go:"L_END_enter", cost:"↓ 下探" }
+    ]
+  },
+
+  /* ---------- Level 9 (从灯塔/岩屋之外的另一分支预留，这里由 no-clip 之外的支线到达略) ---------- */
+
+  /* ---------- Level Fun（Level 0 跟随无脸人的岔路）---------- */
+  LFUN_enter:{
+    dep:5, level:"LEVEL =", title:"Level Fun",
+    onEnter:s=>{ s.san-=28; },
+    text:"你深吸一口气，整个人，走进了那面墙里。\n\n穿过墙壁的那一瞬间，一阵刺耳到严重失真的、欢快的马戏团音乐，「轰」地一声，在你四周炸开，震得你耳膜生疼，几乎要当场跪倒。\n\n等你踉跄着站稳，眼前的景象，让你的血液再次冻结。\n\n满眼，是褪了色的、瘪塌的彩色气球，成百上千个，挂满了墙壁和天花板。吱呀作响、缓慢空转的旋转木马，木马的脸上，笑容诡异而僵硬。堆成小山一样的、五彩的派对彩带和拉花，早已蒙尘。桌上，摆着一个个插着蜡烛、却早已发霉长毛、渗出黑色黏液的生日蛋糕。而墙上、天花板上、地板上、每一寸空间里，都贴满了一张张——咧到极限的、僵硬的、纸片剪成的笑脸。\n\n这里，是后室里臭名昭著的 LEVEL 【=】——〔Level Fun〕。一场永远不会散场的、盛大的、恐怖的生日派对。\n\n一群『派对客（Partygoers）』，缓缓地，转过头，「看」向了你。\n\n它们穿着华丽而陈旧的、上个世纪款式的礼服和裙装，戴着尖尖的派对帽。而它们每一张脸上，都挂着一个——永远无法停下、向两侧扯到面颊撕裂边缘、露出过多牙齿的，扭曲到极致的笑容。那笑容里没有一丝喜悦，只有一种被强行固定的、痛苦的、疯狂的欢乐。\n\n它们看见你，缓缓地，朝你张开了双臂，用一种黏腻的、拖长的、严重走调的合唱，「欢迎」你的到来：\n\n「欢迎——加入我们——永远的——派对——！永远——不散场——！」",
+    choices:[
+      { t:"强迫自己也笑起来，配合它们、伺机脱身", go:"E_smile", req:s=>s.san>=40, note:"你已经笑不出来了，脸上的肌肉僵住，恐惧出卖了你", cost:"需神智≥40" },
+      { t:"尖叫着推开它们，夺路狂奔", go:"LRUN_enter" }
+    ]
+  },
+  LRUN_enter:{
+    dep:6, level:"LEVEL !", title:"Run For Your Life",
+    onEnter:s=>{ s.san-=15; },
+    text:"你发出一声不受控制的尖叫，用尽全力，撞开面前那些张着手臂的『派对客』，头也不回地，一头栽进了一条突然出现在墙壁裂缝后的、灯光疯狂闪烁的、血红色的走廊。\n\n这里是 LEVEL !——探险者们叫它「Run For Your Life」（为你的生命奔跑）。一条仿佛，只为「逃命」这一件唯一的事，而存在的层。\n\n走廊的墙壁上，用各种颜色、各种字迹，潦草而疯狂地写满了标语，在闪烁的红光里，一条接一条地，刺进你的眼睛，砸进你的脑子：\n\n【RUN】【别回头】【它们来了】【快跑】【不要停】【别回头！！！】【已经晚了】\n\n身后，无数杂乱的脚步声、金属爪尖的刮擦声，还有那永不停歇的、越来越近的、癫狂的笑声，汇成了一股黑色的、粘稠的、正在疯狂【逼近】的洪流。你能感觉到那股寒气，正贴着你的后背，一寸寸地追上来。\n\n你的肺，像要炸开，每一次呼吸都撕扯着喉咙。你的双腿，早已超越了极限，却因为纯粹的恐惧，而不敢有一丝一毫的停顿。你只是跑，跑，拼了命地跑，跑向那条永远看不到尽头的红色走廊的深处。\n\n然后，走廊在前方，猛地，一分为二。\n\n一条，通向左边，那里，似乎有一片更明亮的光。\n\n一条，通向右边，那是一道黑暗的、狭窄的缝隙。\n\n你只有一瞬间，一瞬间可以做出选择。身后的洪流，已经近在咫尺。",
+    choices:[
+      { t:"冲进左边那条更明亮的岔路", go:"E_run_out" },
+      { t:"钻进右边那条黑暗的窄缝", go:"E_run_dark" },
+      { t:"回一次头，看清追来的到底是什么", go:"E_run_look" }
+    ]
+  },
+});
+
+/* =========================================================
+   故事 · 第六批A：Level 9 / 最深层 / 生还类结局
+   ========================================================= */
+Object.assign(STORY, {
+  /* ---------- Level 9 · 郊区（Level 7 支线）· 出口③ ---------- */
+  L9_enter:{
+    dep:9, level:"LEVEL 9", title:"无尽郊区",
+    onEnter:s=>{ s.san+=4; s.light-=6; },
+    text:"你攀着湿滑的、覆满藻类的礁石，沿着海岸线，深一脚浅一脚地，艰难前行。冰冷的浪花，一次又一次地拍打上来，把你浇得透湿，几次险些把你卷进海里。你不知道自己在找什么，只是固执地相信，这片海，总该有另一个「岸」。\n\n就在你的体力即将耗尽、几乎要放弃的时候，礁石的另一头，竟然，真的，连接上了一片「陆地」——\n\n可那不是海岸。\n\n你眼前，豁然出现了一整排静止的、亮着暖光的路灯，一片片修剪得整整齐齐、绿得不真实的草坪，一栋栋一模一样的、亮着灯的两层小楼。而这一切，都笼罩在一种永恒的、浓稠的、橘红色的【黄昏】里。太阳，卡在地平线上，永远不落，把整个世界的每一个角落，都均匀地染上一层温柔而虚假的、蜜糖般的暖色。\n\n这里是 LEVEL 9——无尽郊区。\n\n街道横平竖直，一尘不染，通向东南西北四个方向的、无限的远方。草坪上的自动洒水器，「滋——」地悠悠转着，划出一道道小小的彩虹。某户人家的窗户里，透出电视机幽幽的蓝光，隐约还能听见新闻主播平稳的、听不清内容的播报声。空气温暖而宁静，带着青草和洒水后泥土的清香。\n\n这里美好得，像一个梦，一个关于「家」和「安宁」的、标准化的梦。\n\n可你知道，这里【没有人】。\n\n或者说，住在这些亮着温暖灯光的房子里的，那些看电视、修剪草坪、透过窗帘缝隙注视着你的——不是人。\n\n一条私家车道上，停着一辆车，车门虚掩着，钥匙似乎还插在点火器上。而斜对面那栋房子的大门，正随着你的靠近，缓缓地、无声地，向你打开了，门后是温暖的、令人安心的光。",
+    choices:[
+      { t:"走向那辆车，试试能不能开走", go:"E_drive" },
+      { t:"走进那扇自己打开的门", go:"L9_house" },
+      { t:"谁也不惊动，沿着街道一直走下去", go:"E_suburb" }
+    ]
+  },
+  L9_house:{
+    dep:9, level:"LEVEL 9", title:"无尽郊区",
+    onEnter:s=>{ s.san-=10; },
+    text:"你迟疑了一下，还是走向了那扇为你敞开的门。\n\n屋里的一切，都像一个真正的、有人居住的、温暖的家。玄关处摆着拖鞋，墙上挂着一幅幅相框，客厅的沙发上搭着柔软的毛毯，餐桌上，摆着一桌还在冒着腾腾热气的、香气扑鼻的晚餐——红烧肉，炒时蔬，一锅热汤。楼上，隐约传来电视里综艺节目的、热闹的笑声。\n\n这画面，像一根针，猝不及防地刺进了你心里最柔软的地方。你已经太久太久，没有见过这样的场景了。\n\n餐桌旁，坐着一「家人」。\n\n你一进门，他们就齐刷刷地、动作整齐得诡异地，转过头来，朝你露出了微笑——\n\n可是，他们没有脸。\n\n每一张脸上，都是那片熟悉的、平滑的、空白的皮肤，是一屋子围坐在温暖晚餐旁的『无脸人』。父亲，母亲，孩子……他们保持着一个家庭最温馨的姿态，无声地，向你散发着一种近乎悲伤的、渴望的善意。\n\n他们没有攻击你。他们只是安静地，为你拉开了餐桌旁那把，唯一空着的椅子，然后，一齐向你微微倾身，做出一个无比清晰的、邀请的姿态：\n\n坐下吧。加入我们。留下来，做我们的家人。\n\n你这才注意到，客厅墙上那张最大的全家福里，有一个明显空着的位置。那个位置的轮廓，那个身影的形状——不多不少，恰好，就是你。",
+    choices:[
+      { t:"礼貌地后退，转身离开这个「家」", go:"E_suburb" },
+      { t:"鬼使神差地，在那把空椅子上坐下", go:"E_family" }
+    ]
+  },
+
+  /* ---------- 最深处 · 真结局层 ---------- */
+  L_END_enter:{
+    dep:10, level:"LEVEL ???", title:"最深处",
+    onEnter:s=>{ s.san-=10; },
+    text:s=>"那道刻满古老符号的巨大石门，在你身后，发出沉重的轰鸣，缓缓地，合拢了。\n\n然后，是绝对的寂静。\n\n门后，是一个无法用任何语言去准确描述的空间。这里没有墙，没有地面，没有天花板，没有上下左右，没有远近高低。只有那种柔和的、温暖的、乳白色的光，从四面八方，又仿佛，从你自己的身体内部，均匀地、宁静地，散发出来。这里安静得可怕——你这才惊觉，那伴随了你整段旅程、无处不在、几乎已经成为你身体一部分的、荧光灯的嗡鸣声，在这里，彻底地，消失了。\n\n你感觉自己在悬浮，又仿佛，在坚实地站立着。\n\n你意识到，你抵达了。这里是后室的最深处，是所有传说的终点，是无数探险者穷尽一生、九死一生想要抵达、却几乎无人生还的地方。据说，就在这里，有一扇真正的、彻底的〔归途之门〕。它不同于第四层那扇平庸的打印机门——它不会把你送回从前那种麻木的、灰色的生活，而是……把你送回，你灵魂深处，「真正想回去的地方」。\n\n在这片乳白色的光的中央，那扇门，渐渐地，显出了形。\n\n它古朴，沉默，没有把手，没有门缝，没有一丝一毫可以着力的地方。它静静地悬浮在那里，像是在等待着什么——等待你，向它证明，你还记得，「家」是什么。"+(s.flags.photo?"\n\n你的手，下意识地按上了胸口——那张〔全家福〕还在。照片背面那行字仿佛在发烫：『记得我们在等你回家。』":"\n\n你努力去想「家」的样子……可是走了这么深，穿过了这么多恐惧，那些面孔、那些房间、那个本该温暖的地方，早已在记忆里模糊成了一片空白。你什么都想不起来了。"),
+    choices:[
+      { t:"握紧胸口的全家福，走向那扇门", go:"E_true_home", req:s=>s.flags.photo, note:"你的心里没有「家」的锚点——这扇门不会为你打开", cost:"需信物：全家福" },
+      { t:"什么信物也没有，试着推开那扇门", go:"E_deepest", hidden:s=>s.flags.photo }
+    ]
+  },
+
+  /* ========== 生还类结局 ========== */
   E_home_printer:{ ending:true, code:"E01", name:"归乡", tone:"good",
-    text:"你决定相信那份《回归协议》，也相信那行颤抖的警告。三台，不是四台。\n\n你在无尽的隔间里穿行，找到了第一台打印机——一台落满灰的激光打印机。你深吸一口气，按下它的电源键。「嗡」，它挣扎着亮起了指示灯。\n\n你继续走，找到第二台。按下。「嗡」。\n\n然后是第三台。你的手在按钮上悬停了一瞬，脑海里闪过那句「它就在这层楼的某个地方」。你没有去看四周有没有第四台的影子，你只是闭上眼，按了下去。\n\n「嗡——」\n\n第三声响起的刹那，办公室中央的空气开始扭曲、凝聚。一道光缝凭空裂开，越张越大，最后化作一扇门的形状——一扇再普通不过的、你家玄关那样的木门。门缝里，透出的不是日光灯惨白的光，而是一种温暖的、带着灰尘味的、活生生的\"家\"的光线。你甚至听见了门那头，隐约传来的、真实世界的市声。\n\n六十秒。你记得文档说的。\n\n你没有回头去看那可能存在的第四台打印机，没有一丝迟疑，朝着那扇门，全力冲了过去，一头撞了进去。\n\n一阵天旋地转——\n\n然后，是柔软。你瘫坐在自家客厅的沙发上，身体深深陷进熟悉的靠垫里。窗外，是傍晚真实的、会变化的天光，楼下有汽车驶过，邻居家飘来炒菜的香味。墙上的钟在走,秒针一格一格地跳。\n\n你回来了。\n\n很长一段时间里，你都不敢一个人在亮着日光灯的房间里加班。而后室究竟是不是真的存在过，成了一个只属于你一个人的、无法与任何人言说的秘密。\n\n后来的日子里，你变了。你开始留意每一个平凡瞬间的珍贵：清晨窗外真实的鸟叫，同事一句无心的抱怨，地铁到站时那阵熟悉的拥挤。这些曾经让你厌烦的\u201c日常\u201d，如今成了你反复确认\u201c自己真的回来了\u201d的锚点。你再也没有独自加过班，也再没在深夜的办公室里久留。而每当路过一盏发出嗡鸣的、老旧的日光灯，你都会下意识地屏住呼吸，加快脚步——那声音是你与那个世界之间，唯一没有断掉的、细细的一根线。" },
+    text:"你走到三台打印机前，它们静静地立在积灰的桌面上，像三个沉默的裁判。你深吸一口气，伸出手指，依次按下了它们的电源键——\n\n一台。「嗡」。指示灯亮起。\n\n两台。「嗡」。\n\n三台。「嗡」。\n\n第三声轻响落下的刹那，办公室的中央，那片空旷的、铺着灰色地毯的空地上，空气毫无征兆地荡漾起来，像水面被投入石子。然后，一扇再普通不过的、深棕色的木门，凭空浮现，稳稳地立在了那里。门缝里，透出真实的、温暖的、带着尘埃与阳光气味的——家的光。\n\n你没有回头。你没有去看，那第四台打印机，此刻是否也在角落里，无声地亮起了灯，是否正发出某种失望的嗡鸣。你只是紧紧攥着胸口那张全家福，一步，跨了过去。\n\n下一秒，天旋地转。\n\n再回过神时，你正瘫坐在自家客厅那张熟悉的、有点塌陷的沙发上。窗外，是傍晚真实的、正在缓缓变化的天光，楼下传来孩子们放学归来的喧闹，隔壁在炒菜，油烟机嗡嗡地响。电视还开着，播着无聊的广告，茶几上那杯你出门前泡的茶，竟然，还带着一丝余温——仿佛你从未离开，仿佛那一切，只是你伏在办公桌上，做的一个太过漫长、太过真实的噩梦。\n\n后室是否真的存在，从此，成了你一个人守着的、无法向任何人言说的秘密。\n\n只是从那以后，每当你走进一间亮着日光灯的房间，每当头顶传来那种熟悉的、细微的嗡鸣，你都会不由自主地，停下脚步，屏住呼吸，然后，快步走开。而每一个疲惫的深夜，当你想要抱怨生活的乏味时，你都会想起那片无边的黄色，然后，紧紧地，抱住身边的人。" },
 
   E_home_solo:{ ending:true, code:"E02", name:"独行者", tone:"good",
-    text:"你没有再犹豫。\n\n你想起 M.E.G. 前哨站那些人的眼神——有安顿下来的平静，也有再也回不去的、深藏的哀伤。你不想成为他们。你要回家，哪怕这条路只有一半的胜算。\n\n你后退两步，助跑，然后纵身一跃，整个人扑向那圈微微荡漾的、扭曲的空气。\n\n没有门，没有过渡，只有一瞬间极致的、令人作呕的失重与撕扯——仿佛你的每一个细胞都被拆开，塞进一根无限细的管子，又在另一端被重新组装。你的五脏六腑被拧成一团，眼前是一片纯白的、无法描述的\"无\"。\n\n你以为自己要死了。\n\n然后，「砰」的一声，你重重地摔在了坚硬的地面上。\n\n柏油路的粗粝硌着你的手掌。你猛地抬起头——车流，红绿灯，行色匆匆的路人，一栋栋亮着灯的高楼，还有几个被你凭空出现吓了一跳、正诧异地看着你的行人。空气里是汽车尾气和街边小吃混杂的、无比真实的味道。\n\n你成功了。\n\n没有向导，没有地图，没有队友。仅凭着一个人的冷静、运气，和那么一点不肯认命的固执，你从后室最深的绝望里，独自一人，穿了回来。\n\n你趴在马路牙子上，无声地笑了，又哭了。此后很多年里，你再也没能在任何一盏发出嗡鸣的荧光灯下，安心地久留。每当那熟悉的电流声响起，你的心跳都会漏掉一拍。但你活着。你自由地，活着。" },
+    text:"你闭上眼，不再去想那些「虚空」「湮灭」的可怕传说，纵身一跃，跳进了那圈扭曲的、荡漾着涟漪的空气里。\n\n一阵剧烈到极致的天旋地转，五脏六腑都像被一只无形的巨手，狠狠地拧成了一团，你连尖叫都发不出来——\n\n然后，你重重地，摔在了一条坚硬的、真实的柏油马路上。\n\n膝盖和手掌传来火辣辣的擦伤的痛。可这痛，从未如此美妙。\n\n路灯。车流。行人被你突如其来的出现吓了一跳、投来惊诧目光的脸。晚风里，飘来街边小吃摊那股熟悉的、油腻而温暖的香气。远处，有汽车的鸣笛，有情侣的笑闹，有整座城市在夜晚苏醒的、嘈杂而鲜活的心跳。\n\n一切，都真实得让你想跪在地上，放声大哭。\n\n你成功了。没有地图，没有向导，没有 M.E.G. 的接应，仅凭着一个人的冷静、一点近乎奢侈的运气，和一个绝不放弃的念头，你从后室最浅、也最凶险莫测的一道接缝里，硬生生地，赌赢了那条几乎不存在的、回家的路。\n\n没有人会相信你的经历。你也永远不会说。\n\n此后很多年，你再也没有在任何一盏发出嗡鸣的荧光灯下，久留过哪怕一分钟。你搬了家，把所有的灯，都换成了暖黄色的、不会发出那种声音的灯泡。你成了朋友眼中一个有点奇怪的、总是很珍惜和大家在一起的时光的人。只有你自己知道，独自穿过那片黄色的孤独之后，「有人在身边」这件事，有多么，多么珍贵。" },
 
-  E_meg:{ ending:true, code:"E03", name:"探险者", tone:"good",
-    text:"你看着老向导眼中那份历经沧桑的平静，最终，你摇了摇头。\n\n「我留下。」你说，「至少……先留下。」\n\n那个五五开的破洞太可怕了。你还没准备好把自己的一切，赌在一次纵身跃入的运气上。\n\n于是你留了下来。日子一天天过去——尽管在后室，\"天\"只是一个用睡眠勉强丈量的、模糊的概念。你渐渐熟悉了这个世界的每一种脾气：哪一层有干净的水，哪一种声音意味着死亡，杏仁水要怎么省着喝才能撑得最久，遇到无脸人该如何静止，听见猎犬的爪声该往哪个方向退。\n\n你学会了辨认实体的习性，学会了在墙上用炭笔为后来者绘制地图、留下警告——就像当初那些素未谋面的人，为你留下的那样。你不再是那个趴在潮湿地毯上、瑟瑟发抖、连方向都分不清的迷路者了。\n\n很多年后（如果这里还有\"年\"的话），你成了 M.E.G. β-7 前哨站里，人人信赖、连新来的孩子都会怯生生喊一声\"老向导\"的那个人。你脸上，也添了几道旧疤。\n\n你或许永远回不了家了。你早已接受了这一点，甚至不再频繁地想起它。\n\n因为在这座无限延伸的、黄色的孤独迷宫里，你为自己，也为许许多多和你一样迷路的人，亲手点起了一盏，不灭的灯。\n\n这盏灯照亮的地方，就是你新的家。\n\n有时，会有刚穿模进来的新人，像当初的你一样，浑身发抖地被带到你面前。你会递给他们一瓶杏仁水，用最平静的声音告诉他们那句你早已说过无数遍的话：\u201c能走到这儿，说明你运气不坏，脑子也还清醒。\u201d你看着他们眼中的恐惧一点点被希望取代，就像当年的自己。你渐渐明白，\u201c家\u201d或许从来就不是一个具体的地址、一栋具体的房子，而是一种\u201c我不是一个人\u201d的确信。在这个意义上，你早已回家了。" },
+  E_true_home:{ ending:true, code:"E03", name:"真正的归途", tone:"good",
+    text:"你把那张已经被体温焐热的全家福，紧紧地贴在胸口，一步，一步，坚定地，走向那扇没有把手的门。\n\n奇迹，在你靠近的过程中，发生了。\n\n随着你一步步走近，那扇古朴沉默的门上，浮现出了温暖的、流动的光纹，像被唤醒的血脉。它们盘绕、汇聚、明灭，然后，门，缓缓地，向两侧，无声地，敞开了。\n\n门后，不是某条陌生的街道，不是某个标准化的房间。\n\n门后，是一个，你「真正想回去」的地方。\n\n你说不清那具体是哪里，是哪一个瞬间。也许，是童年某个漫长的夏天的午后，纱窗透进斑驳晃动的光，蝉鸣阵阵，厨房里飘来饭菜的香气，母亲在喊你的乳名，让你回家吃饭。也许，是某个你以为早已永远失去、却原来一直在时光的那一头，静静等着你的、温暖的怀抱。也许，是某一句你没来得及说出口的话，某一个你没能好好告别的人。\n\n那是你灵魂最深处，无论走过多少恐惧、遗忘多少东西，都始终没有放开的，唯一称之为「家」的地方。\n\n你的眼泪，无声地，落了下来。\n\n你向着那片光，那个方向，迈开脚步，走了进去。\n\n身后，后室——连同它无尽的黄色房间，它永恒的嗡鸣，它所有的猎犬、无脸人、偷皮者、无光的海与永恒的黄昏，它所有的恐惧、孤独与磨损——在你身后，永远地，彻底地，关上了，消散了，仿佛从未存在。\n\n有人穿越了整座地狱，历经九死一生，不是为了回到原来那个麻木的自己，而是为了，在最深、最黑暗的地方，终于想起来：自己，究竟为什么，如此渴望活着回去。\n\n你记起来了。所以，你回来了。" },
 
-  E_house:{ ending:true, code:"E04", name:"岩上之屋", tone:"neutral",
-    text:"你朝着雾中那盏温暖的灯，游了过去。\n\n黑色的海水冰冷刺骨，几乎要冻僵你的四肢。你不敢去想脚下深渊里那些巨大的阴影，只是拼尽最后一丝力气，一下、一下地划水。就在你觉得自己再也坚持不住、要沉下去的时候，你的手，终于抓住了岩上之屋那被海水泡得发涨的木质门槛。\n\n你连滚带爬地进了屋，反手关上门，将身后那片无边的、咆哮的黑海隔绝在外。\n\n屋里，是另一个世界。\n\n温暖，干燥，安宁。一座石砌的壁炉里，燃着一簇跳动的、永不熄灭的火，把橘红色的光晕洒满整个房间。木地板上铺着柔软的旧地毯，墙边的书架上摆满了书，一张木桌上，放着食物、清水，还有一张字条，字迹温和得近乎慈悲：\n\n『留下来吧。你已经走了很远的路。在这里，你是安全的。』\n\n你环顾四周。屋里没有任何出口——除了那扇通往黑海的门，你找不到第二个可以离开的地方。窗外，是永远翻涌的浓雾和望不到边的死海；窗内，是永恒的温暖与死一般的宁静。\n\n你在壁炉边坐了下来，火光烘着你冰冷的身体。你太累了。\n\n这是庇护，还是一座裹着蜜糖的、更温柔的牢笼？起初，你还会反复地想这个问题，会试图敲遍每一面墙寻找出路。可日子久了——在这没有昼夜、没有时间的屋子里，你渐渐地，不再去想了。\n\n你煮上一壶茶，从书架上取下一本书，在壁炉边坐下。海浪在窗外永恒地轰鸣着。而你，终于，不必再逃了。\n\n时间在岩上之屋里失去了刻度。你不再数日子，因为没有昼夜；你不再期待救援，因为壁炉的火足够温暖。偶尔，透过被水汽模糊的窗，你会看见远处的黑海上，有微小的身影在挣扎、在沉没，也有新的\u201c访客\u201d朝这座屋子游来。你会为他们留一盏灯，煮一壶茶——就像当初那张字条为你做的那样。你成了这座屋子新的、沉默的主人。是庇护，还是囚笼？你早已不再追问。有些问题，本身就是一种执念，而你，已经把执念留在了门外那片冰冷的海里。" },
+  E_awaken:{ ending:true, code:"E04", name:"觉醒者", tone:"good",
+    text:"你站在办公室的隔间里，俯身，指尖将触未触那冰凉的地板——\n\n就在这一刹那，你【停住了】。\n\n一种极其强烈的、令人战栗的既视感，攫住了你。这一幕，你经历过。不是第一次。也不是第二次。\n\n那些泛黄的、无限延伸的房间；那永不停歇、钻进骨髓的嗡鸣；那些没有脸的脸，在门框后停顿、转身；那咧到极限的、痛苦的笑；那片吞噬一切的、无光的海；那永远不落的、蜜糖般虚假的黄昏；那三台，不，是第四台打印机；那张写着「记得我们在等你回家」的全家福……\n\n一段又一段的记忆，像退潮之后，从海底缓缓露出的、狰狞而清晰的礁石，全部，浮了上来。\n\n你死过。你活过。你回过家，又一次次地，从那支掉落的笔开始，重新跌落。你在这个循环里，走过每一层，试过每一个出口，抵达过最深处，也在最深处，被那扇门拒之门外。你已经，数不清，自己在后室里，轮回过，多少回了。\n\n而此刻，在这无数次轮回的终点，你终于，彻底地，明白了：\n\n真正的出口，从来就不在第四层的打印机后面，不在海中央的孤屋里，不在最深处那扇乳白色的门后。\n\n它在这里。就在你【认出这一切】、认出这个循环本身的，这一个清醒的瞬间里。\n\n你没有去够那支笔。\n\n你缓缓地，直起身，闭上眼，深深地,吸了一口气——那空气里，没有霉味，只有办公室里咖啡和纸张的、庸常而真实的气息。你睁开眼。\n\n日光灯静静地亮着，不再嗡鸣。远处的同事在敲键盘，键盘声清脆而真实。窗外，是真实的、会流动、会变换的、深蓝色的夜。\n\n一切如常。\n\n可这一次，你知道，是真的。你终于，从那个连你自己都未曾察觉的、最深的循环里，醒来了。你自由了。" },
 
-  E_smile:{ ending:true, code:"E05", name:"微笑的代价", tone:"neutral",
-    text:"老向导的警告，成了你唯一的救命稻草：不要笑——不，是，要\"笑\"。要成为它们。\n\n你颤抖着，用意志强行控制着自己僵硬的面部肌肉，把嘴角一点点向上扯起，扯出一个笑容。你的眼泪在眼眶里打转，恐惧几乎要让你崩溃，可你脸上，挂着一个和它们一样的、癫狂的笑。你甚至跟着那走了调的音乐，僵硬地摆动身体，鼓起掌来。\n\n奇迹发生了。\n\n那些『派对客』脸上的\"敌意\"（如果那算敌意的话）松弛了下来。它们\"接纳\"了你，把你当成了它们中的一员，簇拥着你，拉着你转圈、跳舞、分食那些爬满东西的蛋糕。你强忍着生理性的呕吐，配合着，微笑着，一寸一寸地，朝着人群的边缘挪动。\n\n你在等一个机会。\n\n机会来了。当一大簇礼花在头顶\"砰\"地炸开，所有派对客都仰起头、发出欢呼、笑容咧得更大的那一瞬间——你猛地转身，扑向墙边你早已锁定的一道裂缝，头也不回地钻了进去。\n\n身后的音乐和笑声骤然被隔断了。\n\n你逃出来了。你成了那极少数、极少数能活着离开 Level Fun 的人之一。\n\n可你付出了代价。\n\n从那以后，无论你身处何种境地——是安全地回到营地，是独自面对绝望，还是想起某段悲伤的往事——你的嘴角，总会不受你的控制，轻轻地、诡异地，向上扬起那么一点点。你再也无法真正地、发自内心地悲伤了。有些东西留在了那场永不落幕的派对里，而它，也把一小片自己，永远地，留在了你的脸上。" },
+  E_meg:{ ending:true, code:"E05", name:"探险者", tone:"good",
+    text:"你做出了决定：留下。\n\n你在 M.E.G. β-7 前哨站，住了下来。\n\n日子，一天一天地过去。在这个没有昼夜、没有时钟的地方，你用喝掉的杏仁水瓶子，用墙上刻下的痕迹，笨拙地丈量着时间。你渐渐熟悉了后室每一层的脾气：哪一层的哪个角落有干净的水源，哪些声音意味着死亡必须立刻噤声，杏仁水要怎样一小口一小口地省着喝才能撑到下一个补给点，手电的电量要永远留下最后三分，给最黑、最深的那段路。\n\n你学会了辨认伪装成人形的实体——看它们眨眼的频率，看它们影子的方向。你学会了在墙上用炭笔，给后来的迷路者，留下简洁而救命的警告：『右转有猎犬』『此处漏电』『别信第四台』。你学会了绘制那些永远在变化、却又总有规律可循的地图。\n\n你不再是那个，趴在潮湿地毯上、对着一个没有脸的怪物瑟瑟发抖的、慌乱的迷路者了。\n\n不知从哪一天起，新来的、眼神里还带着现实世界余温的迷路者们，开始叫你——「老向导」。就像当年，那个收留了你、递给你第一口热汤、在水泥地上为你画下第一张地图的人一样。\n\n也许，你这一生，都再也回不了那个有阳光、有车流、有家人的世界了。\n\n可是，在这座无限的、专门吞噬希望的黄色迷宫里，你为自己，也为每一个在黑暗中跌跌撞撞、几乎要放弃的后来者，点亮了一盏，永不熄灭的灯。\n\n有时候，你在营火边想，这或许，就是一个人，在绝境之中，所能抵达的，最了不起的地方了。不是回家。而是，成为别人的，回家路上的光。" },
 
-  E_run_out:{ ending:true, code:"E06", name:"破晓", tone:"good",
-    text:"你没有时间思考，只有时间去赌。你选择了光。\n\n你用尽全身最后一丝力气，朝着左边那条灯光更亮的岔路狂冲。身后的黑潮发出愤怒的、震耳欲聋的嘶吼，扑向你刚刚站立的位置——扑了个空。\n\n岔路里的光越来越强。白色的、纯粹的、温暖的光，从走廊尽头汹涌而来，越来越亮，亮到刺痛你的双眼，亮到吞没了你身后所有的红色、所有的追逐、所有的笑声与爪声。你冲进那片光里，感觉自己整个人都要被融化、被蒸发——\n\n然后，是鸟叫。\n\n清脆的、真实的、婉转的鸟叫。\n\n你猛地睁开眼。\n\n你趴在一片湿漉漉的草地上。清晨的露水打湿了你的脸颊，凉丝丝的。头顶，是一片会缓缓流动的、灰蓝色渐渐透出金红的、真实的黎明天空。远处，传来早班公交车进站的\"嗤\"的一声气刹，和几个早起晨练的老人隐约的交谈。\n\n你在一座真实城市的、街心公园里。\n\n你缓缓地、颤抖地翻过身，仰面朝天，就那样静静地躺着，贪婪地、大口大口地呼吸着这带着青草味的、自由的空气，贪婪地望着头顶那片会变化、会流动、有云、有鸟、有太阳正在升起的、真实的天。\n\n没有人知道你刚刚从什么样的地狱里逃了出来。你也永远不会告诉任何人。他们不会相信，而你，也不愿再回忆。\n\n晨光一点点铺满了公园。新的一天开始了。而你，活着，见到了它的破晓。" },
+  E_house:{ ending:true, code:"E06", name:"岩上之屋", tone:"neutral",
+    text:"你用尽最后一丝力气，在冰冷的黑海里奋力划动，终于，游到了那块巨大的礁石下，攀着湿滑的石壁，爬进了那扇透着橘黄色灯光的门。\n\n屋里，温暖，干燥。\n\n一座壁炉里，燃着一炉永不熄灭、却不需要添柴的火，跳跃的火光，把整个房间映得暖融融的。木桌上，摆着还冒着热气的食物、一壶清水，和一排排你可以随意取阅的、书页泛黄的书籍。一切都井然有序，一尘不染，仿佛这屋子，一直在静静地，等待着一个疲惫的旅人的到来。\n\n桌上，压着一张字条，字迹温和而苍老：\n\n『留下来吧。你在这里，是安全的。海很大，你已经游得够远了。歇一歇。』\n\n没有出口。你找过了，这屋子里没有任何一扇门，能通向「家」。可是，也没有任何威胁。窗外，是无边无际的、翻涌着浓雾的黑海，是永恒的孤寂与死亡；而窗内，却是这一路以来，你从未享受过的、近乎慈悲的宁静。\n\n你脱下湿透的衣服，在壁炉边烘干，喝了热汤，然后，在那张柔软干净的床上，睡了一个——落进后室以来，第一个，没有噩梦、没有惊醒、彻底安稳的觉。\n\n你在这座海中央的孤屋里，住了下来。\n\n这究竟，是庇护，还是另一种，更温柔、更让人甘愿沉溺的囚笼？日子久了，你已经渐渐分不清，也，渐渐不再想去分清了。你会读书，会望着窗外的海发呆，会在壁炉边，一坐就是很久很久。\n\n有些平静，是用「永远回不去」，换来的。而你，似乎，也接受了这场交换。窗外的灯塔之光，偶尔扫过你的窗，你会抬起头，看一眼，然后，继续低下头，翻过书页新的一页。" },
 
-  E_suburb:{ ending:true, code:"E07", name:"永恒黄昏", tone:"neutral",
-    text:"车可能有诈，门后一定有诈。你谁都不信，只信自己的双脚。你选择，就沿着这条笔直的街道，一直走下去。\n\n你走过一栋又一栋一模一样的白色小楼，走过一个又一个安静的、亮着蓝色电视光的窗口，走过一台又一台悠悠转动、永不停歇的喷淋器。橘红色的夕阳始终卡在地平线上，把你的影子长长地拖在身后，那影子的方向，从不改变。\n\n路口，一个接着一个。街道，永远笔直地伸向那轮不落的太阳。\n\n没有尽头。\n\n你走了很久很久，久到你的双脚不再感到疲惫，久到你的饥饿和口渴都变成了遥远而模糊的记忆，久到你渐渐忘记了自己当初为什么要走，又想要走到哪里去。\n\n奇怪的是，恐惧也随之消失了。\n\n这里没有猎犬，没有笑魇，没有任何会伤害你的东西。只有这永恒的、温柔的、橘红色的黄昏，和这走不完的、宁静的街道。渐渐地，你甚至不再想离开了。这份没有尽头的宁静，抚平了你穿越那么多恐怖之后、早已伤痕累累的神经。\n\n于是你就这样走着。\n\n不知从何时起，你成了这片无尽郊区里，又一个安静的、永远的散步者。偶尔，会有新的迷路者攀着礁石爬上这片\"陆地\"，惊恐地站在路口张望。而你只是从他们身边平静地走过，脸上带着一种他们看不懂的、释然的微笑，继续朝着那轮永不落下的夕阳，一步一步，走下去。" },
-
-  E_void:{ ending:true, code:"E08", name:"虚空回响", tone:"neutral",
-    text:"老向导的话在你耳边回响：也许你会被甩进比这里深得多的虚空，永远出不来。\n\n你不敢拿自己的身体去赌。你从背包里取出一瓶杏仁水，掂了掂，朝着那圈扭曲的空气，用力扔了进去。\n\n结果，出乎你的意料。\n\n那瓶杏仁水，没有\"穿过去\"，也没有\"落下来\"。它在触及那圈涟漪的瞬间，仿佛撞上了一片无形的、粘稠的沼泽。它悬停在了半空中，然后，开始极其缓慢地、诡异地被拉长——瓶身像融化的蜡一样扭曲、抻长、变形，琥珀色的液体在里面翻卷、碎裂。最后，整个瓶子连同里面的水，一起坍缩成了一缕青灰色的、细细的烟，被那圈扭曲无声地、彻底地吞没了。\n\n没有回声，没有落地声，什么都没有。\n\n你的血液瞬间凉透了。\n\n那不是通往家的门。那是一个通往【虚空】的裂口——一个连物质都会被抹除、被消解的、绝对的\"无\"。如果刚才跳进去的是你……\n\n你踉跄着后退，双腿发软，一屁股跌坐在地毯上，大口喘着气，庆幸自己没有纵身一跃。是那一点点的谨慎，救了你的命。\n\n可当你惊魂稍定，抬起头，环顾四周，想要找回来时的路时——\n\n你彻底怔住了。\n\nLevel 0 的房间，变了。\n\n还是那些黄墙纸，那些荧光灯，那些湿地毯。可它们的排列、它们的方位、门洞的朝向……全都微妙地、彻底地，错开了。你来时记下的每一个路标，都不复存在。\n\n你终于明白了一件比死亡更令人绝望的事：在这个会\"呼吸\"、会\"变化\"的无限迷宫里，你可能，永远，都在原地打转。而你刚刚，亲手放弃了唯一一个可能的出口。" },
-
-  E_elevator:{ ending:true, code:"E09", name:"无尽下行", tone:"neutral",
-    text:"老向导说过别搭电梯。可那部电梯自动敞开的门，那方寸之间的、明亮而封闭的空间，在这片过于空旷、过于华美的诡异里，竟透着一种奇异的\"安全感\"。\n\n鬼使神差地，你走了进去。\n\n身后，雕花的铜门缓缓合拢，「叮」的一声，将宴会厅那令人窒息的奢靡关在了外面。电梯里只有你，和一整排泛着幽光的楼层按钮。\n\n电梯，开始下降。\n\n你看着门上方那个显示楼层的数字牌。5……6……7……起初还算正常。可数字很快开始加速跳动：8、9、10、25、100、999……然后，它跳出了你所认识的所有数字，变成了一串蠕动的、扭曲的、不断变形的、你的大脑根本无法解析的\"符号\"。\n\n电梯在下降。不停地下降。\n\n你慌了。你伸手去按每一个楼层按钮，去按那个红色的紧急停止键，去拍打冰冷的铜门——全都没有反应。按钮不亮，门不开，电梯只是平稳地、匀速地、永无止境地，向下，向下，向下。\n\n一分钟。一小时。一天。你分不清了。你从惊慌，到绝望，到麻木，最后陷入一种近乎虚无的平静。你靠着电梯的墙壁滑坐下去，看着门上方那些永远在蠕动、永远无法理解的符号，听着钢缆运转的、单调的嗡嗡声。\n\n不知过了多久——也许是永恒——电梯，终于停了。\n\n「叮。」\n\n铜门，缓缓打开。\n\n门外，是一片你无法用任何已知的语言、概念或维度去描述的空间。它不遵循任何你熟悉的规则，\"上\"与\"下\"、\"远\"与\"近\"在那里失去了意义。\n\n你站起身，最后望了一眼身后这部载着你下坠了不知多久的电梯，然后，迈步，走了出去。\n\n从那以后，对你而言，\"回家\"这个词，连同\"方向\"本身，都不再具有任何意义了。" },
-
-  E_deep:{ ending:true, code:"E10", name:"深潜", tone:"bad",
-    text:"岩上之屋是一座牢笼，你不想被永远困住。你想起传说——海底，藏着通往上层、通往归途的路。\n\n你决定赌一把。你站在礁石边缘，望着脚下那片深不见底的、游动着巨大阴影的黑水，做了几次深呼吸，然后，一头扎了进去。\n\n冰冷瞬间包裹了你，像无数根钢针刺进皮肤。你强忍着，奋力向下游去。\n\n越往下，水越冷，压力越大，光线越暗。很快，来自水面的那一点灰蓝色的微光也彻底消失了，你陷入了和 Level 6 一样的、绝对的黑暗，只是这一次，黑暗是液态的，冰冷的，无处不在的。你死死记着那句\"海底有路\"，凭着一股执念，拼命地、向着更深的黑暗里下潜。\n\n可是，没有底。\n\n你游了很久，久到肺里的空气开始告急，久到胸腔像被一只无形的手死死攥住，灼烧般的窒息感从喉咙一直烧到眼睛。你四肢的力气正在飞速流失，动作越来越迟缓，越来越不听使唤。\n\n下面，依然是无穷无尽的、越来越沉的、仿佛能吞噬一切的黑。\n\n你意识到自己错了。这里没有底，也没有路。传说，只是绝望者的臆想。\n\n就在你的意识开始溶解、涣散，最后一口气即将从唇边逃逸的那一刻——\n\n你仿佛看见，在你下方，极深、极远的地方，亮起了一盏灯。\n\n温暖的，橘黄色的，像家里客厅的那一盏。\n\n你用尽生命里最后的力气，朝着那盏灯，缓缓地，伸出了手。\n\n然后，那盏灯，和其他一切，一起熄灭了。什么都没有了。\n\n后来有探险者说，Level 7 的海底根本没有出口，那只是绝望者临终前，大脑为了安抚自己而编织的、最后一个温柔的谎言。也有人说，那盏灯是真的，只是没有人能游到那么深、还活着回来讲述。真相究竟如何，无人知晓，也无人能证。唯一确定的是：那片黑色的海，又悄无声息地，收下了一个再也不会浮起的人。海面上，浓雾依旧翻涌，仿佛什么都不曾发生。" },
-
-  E_smiler:{ ending:true, code:"E11", name:"直视者", tone:"bad",
-    text:"恐惧压倒了理智。面对那排在黑暗中越来越亮、越来越近的牙齿，你无法克制自己想要\"看清\"它的冲动。你颤抖着，举起手机，把那束微弱的光，直直地照向了那个悬在虚空里的微笑。\n\n这是你在后室里，犯下的最后一个错误。\n\n『笑魇』要的，从来就不是被躲避。它要的，是被\"看见\"，是被注视，是与猎物的目光交汇——因为那一瞬间的对视，是它\"锚定\"你、\"确认\"你、将你彻底纳入它的世界的唯一凭据。\n\n手机的光照亮了它。你终于看清了——那不只是一排牙齿。在光的勾勒下，一张巨大的、扭曲的、由纯粹恶意构成的\"笑脸\"，在黑暗中缓缓浮现，它没有眼睛，却让你产生了被死死\"盯住\"的、灵魂都在战栗的错觉。\n\n就在你们\"视线\"交汇的刹那——\n\n那个笑，猛地放大。\n\n它以一种超越物理的速度扑来，瞬间填满了你的整个视野，你的整个世界。你甚至来不及尖叫。\n\n光，灭了。\n\n————\n\n此后，在 Level 0 那无尽的黄色房间里，偶尔会有新的迷路者，听见一阵缓慢的、沉重的【拖拽声】，从某个看不见的房间里传来，一点一点，朝他们挪近。\n\n而在最深的黑暗里，有时会一闪而过——一排洁白的、整齐的、湿润的牙齿。\n\n它在寻找下一个，愿意与它对视的人。" },
-
-  E_lightsout:{ ending:true, code:"E12", name:"一秒的光", tone:"bad",
-    text:"你输给了黑暗。\n\n不是输给了任何实体，而是输给了那绝对的、有质量的、压得你喘不过气的黑暗本身，和它在你脑中激起的、想要\"看见\"的、原始到无法遏制的渴望。\n\n就一秒。你对自己说。就看一眼，确认一下方向，确认一下自己还\"存在\"，然后马上关掉。就一秒而已，能有什么事？\n\n你颤抖的拇指，摁下了手电的开关。\n\n雪白的光柱，在这片吞噬一切的黑暗中，猛地亮起。\n\n就那一秒。\n\n在那一秒里，光照亮了你四周的一切——\n\n【脸】。\n\n成百上千张脸。\n\n它们紧紧地、密密麻麻地贴着你，从你的正前方，从你的左右，从你的头顶，从你的脚下，从每一个方向，无声地、一动不动地，将你团团围住。它们苍白、扭曲、表情各异，却有一个共同点：所有的眼睛，此刻都因为这束光，而骤然\"睁\"开，齐刷刷地，聚焦在了你的身上。\n\n它们一直都在。从你坠入这一层的那一刻起，它们就一直安静地、贪婪地围绕着你，等待着，等待着你亲手，为它们点亮这一盏灯。\n\n你甚至没有来得及，把那一秒的\"啊\"字，喊出口。\n\n光，是你在 LEVEL 6 里，看见的最后一样东西。" },
+  E_lighthouse:{ ending:true, code:"E07", name:"灯塔守望", tone:"good",
+    text:"你放弃了近在眼前的、亮着温暖灯光的岩上之屋，转而，朝着那座更远、更孤独、几乎要被浓雾完全吞没的灯塔，一下一下地，游了过去。\n\n这段路，远得多，也冷得多。有好几次，你以为自己撑不下去了，可每当你抬起头，那束一圈圈扫过海面的光，总会恰好落在你身上，像一只温暖的手，把你从放弃的边缘，重新托起。\n\n灯塔里，空无一人。\n\n只有一盏巨大的、老式的探照灯，安装在塔顶，日复一日，年复一年，不知疲倦地，缓慢旋转着，把那束坚定的光，投向这片无尽的、吞噬了无数生命的黑海。\n\n塔顶的木桌上，留着一本泛黄的、写满了字的值班日志。你翻开它，最后一页，是这样写的：\n\n『灯，不能灭。\n\n我不知道我守了多久，也不知道还要守多久。我大概，是回不去了。但只要这片海上，还有一个像我当年一样，在黑暗和浓雾里挣扎、看不见方向、快要绝望的人——就得有人，为他们，把这盏灯，亮着。\n\n如果你读到这里，那么，现在，轮到你了。』\n\n你沉默了很久。然后，你放下日志，走到那盏巨大的探照灯前，学着接过了，这份守灯人的职责。\n\n你或许，永远回不了家了。\n\n可是，每当浓雾的深处，有一个迷路的、绝望的身影，挣扎着浮现，你便亲手转动那束光，为他照亮一小片，可以前进的方向——就在那一刻，这片曾经吞没了你、吞没了无数人的、冰冷绝望的海，忽然，有了一丝人的温度。\n\n你成了别人穿越黑暗时，唯一的坐标，唯一的、不会熄灭的希望。这或许，不是归途。但这是，一件值得用余生去做的事。" },
 });
 
 /* =========================================================
-   结局 · 下半（E13 - E24）
+   故事 · 第六批B：其余结局 + 启动
    ========================================================= */
 Object.assign(STORY, {
-  E_funhouse:{ ending:true, code:"E13", name:"第四台打印机", tone:"bad",
-    text:"那行颤抖的警告——【别去找它】——反而像一根钩子，勾住了你的好奇心，再也甩不掉。\n\n第四台打印机是什么？为什么不能碰？如果它真那么危险，为什么不干脆毁掉它？无数个问题在你脑中盘旋。你告诉自己：我只是去看一眼，看一眼就走，绝不去碰。\n\n你开始在无尽的隔间里搜寻。奇怪的是，你已经数过的三台打印机，你都能轻易找回，可那\"第四台\"却像在和你捉迷藏。直到你几乎要放弃时，在办公区一个最偏僻、最昏暗的死角，你看见了它。\n\n它和其他三台，一模一样。同样的型号，同样的落灰，同样安静地立在墙角。\n\n可你站在它面前，却感到一阵没来由的、深入骨髓的寒意。它\"看\"起来很平常，但你身体里的每一个细胞都在尖叫着，警告你快跑。\n\n你本该转身离开的。可你的手，像是被某种无形的力量牵引着，不受控制地，缓缓抬起，伸向了那个电源按钮。\n\n「我只是……看一眼……」\n\n你按了下去。\n\n它没有亮起指示灯。它开始\"打印\"。\n\n打印机的出纸口，缓缓地、一寸一寸地，吐出了一张纸。你颤抖着抽出来，翻过来看——\n\n那不是文档。是一张照片。\n\n照片上，是你自己。此时此刻的你，正低着头，惊恐地，看着手里的这张照片。\n\n下一秒，整个 LEVEL 4 开始像一块被投入火中的蜡，扭曲、融化、坍塌。灰色的隔间板上，凭空长出了一张张咧开的笑脸，越来越多，越来越大。日光灯的白光变成了刺目的、旋转的彩色。地板在你脚下张开了一张大口。\n\n你被拖了下去，拖进那片你曾侥幸逃过的、永不落幕的癫狂里——Level Fun 的最深处。\n\n至少，从此以后，你再也不用为\"回不回得了家\"这种事，而烦恼了。你会永远地，笑下去。" },
+  /* ========== 中性 / 未定 ========== */
+  E_drive:{ ending:true, code:"E08", name:"无尽公路", tone:"neutral",
+    text:"你钻进那辆停在车道上的车，握住方向盘，深吸一口气，把钥匙一拧——\n\n出乎意料地，引擎竟真的「轰」地一声，顺畅地发动了，仪表盘的灯次第亮起，收音机也「滋啦」一声，自动打开了。\n\n你踩下油门，猛地冲出了那个死寂的、亮着虚假暖光的街区。后视镜里，那栋敞着门的房子，和门后那些没有脸的「家人」，迅速地缩小、远去。\n\n公路，笔直地，向着永恒黄昏的深处，延伸而去。\n\n两旁，是一模一样的房子、一模一样的路灯、一模一样的、修剪整齐的草坪，飞快地向后退去，退去，像一段不断循环的背景。收音机里，流淌出一首你从未听过、却莫名让你眼眶发热、喉咙发紧的老歌，旋律温柔而苍凉，仿佛在诉说着某个所有人都已忘记的故事。\n\n你就这样一直开，一直开。\n\n油箱的指针，纹丝不动，永远停在满格。太阳，永远卡在地平线上，把你的影子，长长地投在身后的路上。前方，永远有路，笔直，空旷，没有尽头。\n\n你不知道，这条路，究竟通向哪里。不知道它会不会有尽头，不知道拐过某个弯，会不会突然，就开回了那个真实的、有家的世界。你甚至开始怀疑，这条路，是不是根本就没有终点，而你，将永远，永远地，开下去。\n\n可是——握着方向盘的这一刻，风从摇下的车窗，灌进来，吹动你的头发，收音机里放着那首让人想哭的歌，前方是无限的、自由的路——\n\n至少此刻，你是自由的。你不再奔跑，不再恐惧，不再需要为任何事情，噤声、颤抖、下注。\n\n你握紧了方向盘，轻轻地，跟着那首歌，哼了起来。\n\n这，好像，也就够了。" },
 
-  E_skinstealer:{ ending:true, code:"E14", name:"换皮", tone:"bad",
-    text:"恐惧攫住了你的四肢，也攫住了你的判断。你没有砸镜子，也没有逃跑。你僵在原地，像被钉住了一样，看着那套没有身体的西装，是如何一点一点地，\"穿上\"你的模样。\n\n这是一种超越了恐怖的、诡异的\"迷人\"。\n\n空荡的袖管渐渐充盈，仿佛有无形的手臂钻了进去；领口的位置，一张脸缓缓凝聚成形——先是模糊的轮廓，然后是眉眼，是鼻梁，是嘴唇。你看着那张脸，一点一点地，变成你的脸。\n\n镜子里的\"你\"，笑得越来越自然了。它调整着表情，模仿着你此刻惊恐的神态，又切换成从容的微笑，像一个演员在试戏。它模仿得越来越像，越来越熟练，到最后——它比你自己，还要像\"你\"。它的眼神里有你没有的自信，它的姿态比你更舒展，仿佛\"你\"这个身份，穿在它身上，比穿在你身上更合身。\n\n那具\"新的你\"，缓缓整理了一下西装的领带，理了理头发，然后，转过身来，面对着真正的、僵在原地的你。\n\n它礼貌地，朝你微微颔首——那是一个道别的姿态，甚至带着一丝……感谢。\n\n然后，它转身，拉开客房的门，迈着从容而自信的步伐，走进了后室的深处。它会去寻找那扇回归门，它会穿过它，它会回到你的家，睡你的床，见你的朋友，过完\"你\"的一生。没有人会发现任何不对。\n\n而真正的你，被永远地留在了这间华美的、永不褪色的客房里。你成了一具没有人认领的、多余的皮囊。\n\n你麻木地，转向那面镜子，想再看一眼自己。\n\n镜子里，映出一张脸。\n\n可那，已经不是你的脸了。" },
+  E_suburb:{ ending:true, code:"E09", name:"永恒黄昏", tone:"neutral",
+    text:"你什么都不碰。\n\n你没有走向那辆车，没有走进那扇为你敞开的门。你只是低下头，沿着那条笔直的、一尘不染的街道，一个人，一直，往前走。\n\n自动洒水器，「滋——」地悠悠转着，在你走过时，划出一道小小的、转瞬即逝的彩虹。一扇扇窗户后，电视机的蓝光明明灭灭，偶尔有窗帘，被无形的手，悄悄掀开一角，又轻轻放下。太阳，永远悬在地平线上，把整个世界，染成温柔而虚假的橘红。\n\n你走过一栋，又一栋，一模一样的房子。\n\n你走过一个，又一个，空无一人的路口。\n\n没有尽头。可是，也没有危险。这里安静，温暖，秩序井然。没有猎犬的爪声，没有无光的恐惧，没有咧到极限的笑脸。\n\n渐渐地，你发现，你不再害怕了。\n\n再走了不知多久，你发现，你甚至，不再想离开了。\n\n这里多好啊。不需要奔跑，不需要恐惧，不需要绞尽脑汁地计算资源和风险，不需要，记得任何令你痛苦的事——比如，你曾经拥有过什么，又失去了什么，比如，你为什么，会流泪。\n\n你的脚步，越来越慢，越来越轻。你脸上那点因为紧张而绷着的线条，一点点地，松弛了下来，变得平和，安详，空茫。\n\n你就这样走着，在这永不落幕的、蜜糖般的黄昏里，成了 LEVEL 9 又一个，安静的、永远的散步者。\n\n很多年以后——如果这里还有「年」的概念——也许，会有另一个刚刚跌落、满脸惊惶的迷路者，远远地，看见你悠然散步的背影，然后，如释重负地，朝你跑来，以为自己，终于，遇到了一个同类。" },
 
-  E_family:{ ending:true, code:"E15", name:"归属", tone:"neutral",
-    text:"你看着墙上那张全家福里，那个恰好是你形状的空位。你看着那把为你拉开的椅子。你看着这一屋子无脸的、却透着某种\"温柔\"的身影。\n\n你太累了。\n\n穿越了那么多的恐怖，逃过了那么多的追猎，面对了那么多的死亡……你早已疲惫到了骨子里。而此刻，这个温暖的、亮着灯的、摆着热饭的\"家\"，这份\"你属于这里\"的无声召唤，像一只温柔的手，轻轻地按下了你所有紧绷的神经。\n\n于是，你缓缓地，走过去，在那把为你留了很久很久的椅子上，坐了下来。\n\n满屋子的『无脸人』，发出了一阵满足的、无声的\"叹息\"。你感觉不到声音，却清晰地感觉到那份\"欢迎\"，那份\"终于等到你了\"的圆满。餐桌上的热气蒸腾着，电视里放着永远不会结束、也永远不会难看的温馨节目，窗外，是永恒的、温柔的、橘红色的黄昏。\n\n墙上那张全家福，在你坐下的瞬间，悄然发生了变化。那个留白的空位，被悄悄地、自然地填满了——现在，那里坐着一个模糊的、没有面孔的身影，形状，恰好就是你。\n\n你说不清这究竟算不算一个真正的家。它们不是你的亲人，这里不是你的世界，你甚至叫不出任何一个\"家人\"的名字。\n\n可是，在这无限的、能把人逼疯的孤独之中，至少——至少你不再是一个人了。\n\n你伸出手，拿起了面前摆好的餐具。就在这时，你摸了摸自己的脸，发现你的五官，正一点一点地，变得平滑起来。\n\n你笑了。或者说，你\"感觉\"自己笑了。然后你低下头，和你的新家人一起，享用起这顿永远不会冷掉的晚餐。" },
+  E_smile:{ ending:true, code:"E10", name:"微笑的代价", tone:"neutral",
+    text:"你强迫自己，扬起了嘴角。\n\n你的面部肌肉，因为长久的恐惧而僵硬、颤抖，可你还是逼着它们，一点一点地，向上，扯出一个笑容。你学着那些『派对客』的样子，微笑，鼓掌，随着那严重失真的、疯狂的音乐，笨拙地、机械地，摇摆起身体。\n\n你在心里，一遍遍地告诉自己：笑。继续笑。别停。你的命，就系在这个笑容上。\n\n『派对客』们，渐渐地，放松了对你的警惕。它们扭曲的笑脸凑近你，用那种黏腻走调的声音，对你「唱」着祝福，把你，当成了它们中的一员，当成了这场永恒派对，又一个快乐的、永不离席的客人。它们递给你发霉的蛋糕，为你戴上褪色的纸帽，拉着你，跳起那种没有章法的、令人眩晕的舞。\n\n你陪着它们，「庆祝」。你切开那些渗着黑色黏液的蛋糕，你举起不知盛着什么的酒杯，你笑，你笑，你笑得脸颊发酸、眼角流泪，却一刻都不敢停。\n\n终于，机会来了。\n\n趁着一轮巨大的、虚假的礼花在头顶「砰」地炸开，所有的派对客，都仰起那一张张咧开的脸，去「欣赏」那片光的刹那——你悄悄地，一点一点地，退到了人群的边缘，然后，猫着腰，钻进了墙上一道，不起眼的裂缝。\n\n你逃出来了。\n\n你活着，离开了 Level Fun——这是极少数，极少数人，才能做到的事。\n\n可是，从那以后，有些东西，永远地，留在了那里，也有些东西，永远地，跟了出来。\n\n无论开心，还是难过；无论是听到天大的喜讯，还是独自一人，在深夜里，为某件伤心事流泪——你的嘴角，总会不受控制地，轻轻地，向上，扬起。\n\n有些笑容，一旦学会，就再也，卸不下来了。你带着这个,永远的微笑，活了下去。" },
 
-  E_delver:{ ending:true, code:"E16", name:"掘进者", tone:"neutral",
-    text:"你压住喉咙里几乎要冲出来的惊叫，也压住了转身逃跑的本能。\n\n逃跑，只会惊动鼠群。你唯一的活路，是那些刻在岩壁上、指向深处的箭头。留下它们的人，一定是穿过了这里，才有机会刻下后面的路标——这是你此刻唯一能抓住的逻辑。\n\n你贴着岩壁，屏住呼吸，沿着箭头指引的方向，从鼠群的边缘，一寸一寸地、极其缓慢地移动。红着眼睛的死亡鼠在你脚边、头顶窸窸窣窣地涌动，你能感觉到它们的皮毛偶尔擦过你的裤脚，那种触感让你浑身汗毛倒竖。但你没有停，也没有发出任何多余的声响。\n\n渐渐地，那片令人窒息的沙沙声，被你抛在了身后。箭头继续向深处延伸，你继续跟着走。手电的光柱里，钟乳石越来越奇异，岩壁上的凿痕越来越密集、越来越古老。\n\n最终，箭头把你引到了洞穴的最深处——一道巨大的、古朴的石门前。\n\n石门上，刻满了你完全无法辨认的、螺旋状的奇异符号，它们排列的方式，隐隐让你头痛。而门缝里，正透出一种你在整个后室里都从未见过的光——柔和的、流动的、乳白色的光晕。\n\n你伸出手，推开了那扇沉重的石门。\n\n门后，不是任何一个已知的层。不是黄色的房间，不是黑色的海，不是任何探险者手册上记载过的地方。那是一片……全新的、从未被任何人类的脚步丈量过、被任何人类的语言描述过的空间。\n\n你成了它的第一个发现者。\n\n你没能回家。但你抵达了一个连穷尽一生的老探险者都梦寐以求、却从未能触及的地方。你从背包里摸出那截炭笔，在门旁的岩壁上，郑重地刻下了自己的名字，和一个属于你的、崭新的箭头。\n\n然后，你抬起头，迎着那片乳白色的光，走了进去。前方，是一整个等待被命名的世界。" },
+  E_family:{ ending:true, code:"E11", name:"归属", tone:"neutral",
+    text:"你鬼使神差地，走到那把为你拉开的、空着的椅子前，缓缓地，坐了下来。\n\n椅子很舒服，是那种久坐之后，身体会记住的、家的舒服。\n\n一屋子的『无脸人』，在你坐下的瞬间，齐刷刷地，发出了一声满足的、无声的「叹息」——你感觉到的，不是声音，而是一种情绪，一种失而复得的、圆满的安宁，弥漫在整个温暖的房间里。\n\n晚餐的热气，还在腾腾地蒸腾着，饭菜的香气，包裹着你。楼上的电视，放着永远不会结束的、热闹的节目。窗外，是温柔的、永不消逝的、蜜糖般的橘色黄昏。母亲（那个坐在主位、系着围裙的无脸人）为你夹了一筷子菜，父亲为你倒上一杯饮料，孩子们（两个小小的无脸人）好奇地、亲昵地，凑到你身边。\n\n你抬起头，望向客厅墙上那张最大的全家福。\n\n那个,原本空着的位置，此刻，被悄然填满了——那里，多了一个模糊的、没有面孔的身影，那身影的轮廓，那姿态，不多不少，恰好，就是你。\n\n你说不清，这究竟，算不算一个「家」。\n\n他们没有脸，没有名字，没有过去。你和他们之间，隔着一整个无法逾越的、非人的鸿沟。可是……在这无边无际、几乎要将你彻底吞没的孤独之中，至少，此刻，此地，你，不再是一个人了。\n\n有人为你留了一盏灯，一桌饭，一把椅子，和一个，家里的位置。\n\n你低下头，伸出手，拿起了面前的餐具。烛光温柔地，照在你的脸上——照在你那张，正在渐渐变得平滑、渐渐失去五官轮廓的脸上。\n\n你，终于，有了归属。你加入了这场，温暖的，永恒的晚餐。" },
 
-  E_ratswarm:{ ending:true, code:"E17", name:"退潮", tone:"bad",
-    text:"面对那面\"蠕动的墙\"，你脑中一片空白，身体的本能压倒了一切——你转身就跑。\n\n这是致命的错误。\n\n惊动一只死亡鼠，就是惊动整个鼠群。你脚步声一响、身影一动，身后那片黑暗，瞬间\"活\"了过来。\n\n成千上万只死亡鼠，如同一场决堤的、黑色的洪水，发出震耳欲聋的尖啸，从岩壁上、从洞顶、从每一道石缝里倾泻而下，铺天盖地地朝你涌来。它们覆盖了整条通道的地面、墙壁和天花板，是一片攒动着的、红着无数只眼睛的黑潮。\n\n你疯了一样地朝井口的方向冲刺。手电剧烈地摇晃着，光柱扫过之处，全是密密麻麻、争先恐后的身影。你能感觉到最前面的那些已经追上了你的脚跟，尖利的爪子扒着你的鞋，你的裤腿。你连滚带爬，用尽了生命里所有的力气。\n\n井口的那道铁梯，那一小片来自 Level 1 的、遥远的黄光，出现在了你的视野里。\n\n就差一点。\n\n你伸出手，指尖，几乎已经触到了冰冷的铁梯——\n\n就在这时，黑潮从你的脚下、你的身后，彻底地漫了上来。温热的、密不透风的、由无数身躯组成的浪，将你整个人淹没。\n\n你最后看见的，是井盖那一小片遥远的、温暖的黄光，被无数攒动的黑色身影，一寸，又一寸地，彻底吞没。\n\n然后，是黑暗。以及，无处不在的、细小的、忙碌的啃噬声。" },
+  E_void:{ ending:true, code:"E12", name:"虚空回响", tone:"neutral",
+    text:"你迟疑再三，最终，没有用自己的血肉之躯去赌。你从怀里，掏出一瓶珍贵的杏仁水，屏住呼吸，轻轻地，把它，扔进了那圈扭曲荡漾的空气里。\n\n瓶子，没有落下。\n\n它悬停在了半空中，就在那片扭曲的中心。然后，在你惊恐的注视下，它开始，缓慢地，被拉长，被扭曲，被一种无形的力量，从内到外地，碾碎、揉皱、撕裂。琥珀色的液体，没有洒出，而是和玻璃一起，化作了一缕青灰色的、几乎透明的烟，被那片扭曲，无声地，吞没了，仿佛从未存在过。\n\n没有回声。没有痕迹。没有通向任何地方的门。\n\n那不是回家的接缝。那是通往【虚空】的裂口——一个连「毁灭」都算不上，只是纯粹地、彻底地，将一切「抹除」的，绝对的空无。\n\n你踉跄着，向后连退了好几步，一屁股跌坐在冰冷的地毯上，冷汗，瞬间浸透了全身。后怕，像冰水一样，从头顶浇下——如果刚才，纵身跳下去的，是你……\n\n你活着。你用一瓶救命的水，为自己，买回了这条命，和这个足以让你崩溃的、真相。\n\n可当你惊魂未定地，撑着地面，回过头——\n\nLEVEL 0 的房间，已经，不是刚才那一间了。\n\n墙纸，灯管，地毯，家具的摆放……一切，都还是那种令人窒息的黄，一切，都还是那么「相似」。可又全都，微妙地，说不清、道不明地，错了位——门框的位置变了，墙角的霉斑不见了，那处让你想跳下去的、发黑的地毯，也消失得无影无踪。\n\n你终于，绝望地，明白了。\n\n在这个无限的、会呼吸的、以吞噬希望为食的世界里，你可能，永远，都只是在原地打转。而你刚刚，为了一个早已注定的答案，亲手，浪费掉了一瓶，或许能在未来某一层，救你性命的水。" },
 
-  E_cavein:{ ending:true, code:"E18", name:"寂静的塌方", tone:"bad",
-    text:"你想起了在别处学到的经验——很多实体依赖的是声音和动静。你强迫自己冷静下来，做出了一个反直觉、却可能正确的选择：\n\n你熄灭了手电。\n\n黑暗瞬间吞没了一切。你把自己紧紧地钉在岩壁的一处凹陷里，蜷缩起来，把呼吸压到最轻，最缓，让自己和这片黑暗、这片岩石融为一体。\n\n然后，你等待。\n\n鼠群来了。你听见那片沙沙声越来越近，越来越响，最终化作一片席卷而过的声浪。无数只死亡鼠贴着你的鞋边、你的身侧涌过，一波，又一波。它们温热的、毛茸茸的身躯不时擦过你，可它们……没有发现你。你成功了。你的冷静，骗过了整个鼠群。\n\n沙沙声渐渐远去，洞穴里重新恢复了寂静。你在黑暗里又等了很久，直到确信最后一只鼠也已远离，才敢长长地、无声地，吐出一口气。\n\n你活下来了。\n\n就在你松懈下来、准备重新点亮手电的这一刻——\n\n头顶，传来一声沉闷的、令人心悸的\"咔啦\"。\n\n你猛地抬起头。\n\n你忘了一件事：成千上万只死亡鼠日复一日的刨挖，早已让这片本就脆弱的洞顶，变得千疮百孔、不堪重负。而刚才那场席卷而过的鼠群奔流带来的震动，成了压垮它的最后一根稻草。\n\n巨大的岩石，在绝对的黑暗中，无声无息地，崩落了下来。\n\n你甚至没能看清，是什么砸中了你。\n\n洞穴，重归死寂。仿佛你，从未来过这里。\n\n有些危险，不来自任何张牙舞爪的实体。它只来自这个古老世界本身的、漫不经心的、一次微不足道的坍塌。" },
+  E_elevator:{ ending:true, code:"E13", name:"无尽下行", tone:"neutral",
+    text:"你走进那部镶着黄铜雕花的电梯，铜门在你身后，缓缓地，合拢了。\n\n电梯里，暖黄的灯光，温柔得像一个陷阱。你还没来得及寻找楼层按钮，脚下就是一沉——电梯，开始下降。\n\n墙上的楼层数字，疯狂地跳动起来：5、6、7……9、10、11、12……数字越跳越快，越跳越快，很快，就跳出了你所认得的一切范围。然后，那些数字，开始变形，扭曲，蠕动，变成一串你从未见过的、无法辨认的、仿佛活物般的古怪符号，在显示屏上，无声地翻滚。\n\n电梯，不停地，向下，向下，向下。\n\n你慌乱地，去按控制面板上的每一个按钮——开门，警铃，还有那些标着奇怪符号的楼层键——全都毫无反应，像是按在一块冰冷的石头上。失重感，一阵接着一阵，从胃里，一直空落到脚底。你甚至开始怀疑，这部电梯，是不是根本，就没有底，是不是要，永远地，下坠下去。\n\n时间失去了意义。你不知道自己下降了多久，是几分钟，还是几个世纪。\n\n终于，在某一个无法预知的时刻，电梯，毫无征兆地，停了。\n\n「叮——」\n\n那声再熟悉不过的提示音，在这里，响得格外诡异。铜门，缓缓地，再次打开了。\n\n门外，是一片，你无法用任何已知的语言、任何人类的经验，去描述、去理解的空间。那里的几何是错的，那里的光是错的，那里的一切，都以一种，会灼伤你理智的方式，存在着。\n\n你在门口，迟疑了很久，很久。\n\n可你知道，你回不去了。上，早已没有了意义。\n\n最终，你还是，抬起脚，迈了出去，走进了那片，无法描述的未知。\n\n从那以后，「上」和「下」，「里」和「外」，对你，就再也，没有任何意义了。你成了，一个永远，行走在楼层与楼层之间、维度与维度之间，连自己，究竟身在何处，都再也说不清楚的，永恒的旅人。" },
 
-  E_window:{ ending:true, code:"E19", name:"窗中人", tone:"bad",
-    text:"墙上的警告言犹在耳——如果你在不该有窗的地方看见一扇窗，别靠近。\n\n可正是这份\"不该存在\"，攫住了你的好奇。在这片一望无际、封闭得让人窒息的办公室里，一扇\"窗\"，一扇可能通向\"外面\"的窗，有着致命的吸引力。你告诉自己：也许，这就是出口呢？\n\n你朝那扇窗走了过去。\n\n它就那样嵌在两个隔间之间的灰色墙壁上，一扇再普通不过的、带着白色边框的office窗户。可当你走近，透过玻璃看向\"外面\"时，你的血液凝固了。\n\n窗外，没有天空，没有街道，没有任何风景。\n\n窗外，是【另一个房间】。一个和你所在的这间办公室，一模一样的房间——同样的隔间，同样的日光灯，同样的灰色。\n\n而在那个房间里，同样有一扇窗。窗前，同样站着一个人。\n\n那个人，背对着你。\n\n你愣在原地，一种荒谬又恐怖的感觉爬上脊背。你鬼使神差地，抬起手，轻轻地，敲了敲面前的玻璃。\n\n「咚，咚。」\n\n窗那头，那个背对着你的人，缓缓地、缓缓地，转过身来。\n\n是你自己的脸。\n\n它平静地看着你，然后，露出了一个了然的、你从未有过的、意味深长的微笑。它抬起手——\n\n也敲了敲玻璃。从它的那一侧。「咚，咚。」\n\n就在那一瞬间，一阵剧烈的眩晕攫住了你。天旋地转。当你重新站稳，回过神来时，你发现——\n\n你正背对着一扇窗，站着。\n\n而在你身后，那扇窗的另一头，有人，正在轻轻地敲着玻璃。「咚，咚。」\n\n你成了窗里的人。而你，再也，转不过身去了。" },
+  E_deepest:{ ending:true, code:"E14", name:"深渊尽头", tone:"neutral",
+    text:"你两手空空地，走向那扇乳白色的、没有把手的门。\n\n你伸出双手，抵住它冰冷的、光滑的表面，然后，用尽了全身的力气，去推。\n\n门，纹丝不动。\n\n它冰冷，沉默，像一位无声的、永恒的审判者，静静地，衡量着你。你能感觉到，它在「看」你，看进你的内心最深处，寻找着某样东西——某样，你本该带来，却，早已弄丢了的东西。\n\n你努力地，去想「家」的样子。\n\n可是……什么都没有。\n\n你想不起家门的颜色，想不起客厅的布置，想不起那些本该无比熟悉的面孔，究竟长什么模样。你甚至想不起，自己，究竟为什么，要如此拼命地，想要「回去」。那个曾经让你在猎犬的爪牙下、在无光的海底、在偷皮者的注视中，一次次咬牙撑下来的、名为「家」的念头——早已在这漫长的、九死一生的下探途中，被恐惧，被孤独，被这个世界无孔不入的侵蚀，一寸一寸地，磨成了，一片空白。\n\n你走得太深了。深到，你为了活下去，不得不，一点点地，丢掉了那些让你「之所以是你」的东西。\n\n而这扇门，只为，心里还怀着「家」的人，敞开。\n\n没有锚点的灵魂，它，不会理睬。\n\n乳白色的光，渐渐地，暗了下去，像一场缓慢的、温柔的日落。\n\n你没有再徒劳地推门。你缓缓地，转过身，背靠着那扇，你永远也推不开的门，慢慢地，滑坐了下来。\n\n这里很安全。是的，无比安全。再没有实体，再没有黑暗，再没有任何威胁，能够抵达这最深、最寂静的地方。\n\n只是，也再没有出口了。再没有，「家」了。\n\n你在这后室的最深处，坐了下来，成了深渊尽头，一个新的守门人。替所有，和你一样，历尽千辛万苦走到了这里、却同样，两手空空、遗忘了来路的人，守着，这一扇，谁也推不开的，归途之门。" },
 
-  E_lighthouse:{ ending:true, code:"E20", name:"灯塔守望", tone:"good",
-    text:"岩上之屋是一座出不去的牢笼，深潜是一场没有底的赌博。你的目光，越过它们，投向了更远处那个高耸的、顶端有微光缓缓旋转的黑色剪影。\n\n那是一座灯塔。\n\n你不知道为什么，但那旋转的光，比岩上之屋那盏静止的、诱惑般的灯，更让你感到安心。那光不是在\"引诱\"，而是在\"指引\"，在\"守护\"。你调转方向，朝着灯塔，游了过去。\n\n路途比想象的更远，也更艰难。冰冷的海水几度要将你拖入深渊，你脚下那些巨大的阴影也几度靠近，又几度悠悠游远。你拼尽了最后一丝力气，终于抓住了灯塔底部湿滑的岩石，手脚并用地爬了上去，推开那扇沉重的铁门。\n\n灯塔里，空无一人。\n\n只有一座巨大的、结构精密的探照灯，在塔顶日复一日、年复一年地缓缓旋转着，将那束坚定的光，一遍又一遍地，扫过这片无尽的、绝望的黑海。灯塔内部干净、整洁，储备着足够的食物和淡水，仿佛一直有人在维护，却又不见其踪影。\n\n在塔顶的操作台上，你发现了一本厚厚的值班日志。它记录了许多个\"守灯人\"的字迹，一代又一代。最后一行，墨迹已经有些陈旧：\n\n『灯，不能灭。\n只要这片海上还有迷路的人在挣扎，就必须有人，为他们亮着。\n轮到你了。』\n\n你握着那本日志，望向窗外那片被光柱一次次划破的浓雾。\n\n于是，你留了下来。你接过了这份古老的、无人交托却又责无旁贷的职责。你或许永远回不了自己的家了——但每当浓雾深处，有新的、迷路的身影挣扎着浮现，你便转动那座巨大的探照灯，将光，稳稳地投向他们，为他们照亮一小片，可以前行的方向。\n\n那一刻，这片吞噬了无数生命的、绝望的黑色海洋，因为你，而有了一丝，人的温度。你不再只是一个逃亡者。你成了一座灯塔。\n\n很多年后——如果这里还有\u201c年\u201d的话——你在值班日志的最后，也添上了属于自己的一行字，交给那个终将到来的、下一个守灯人：\n\n\u300c我曾经也想过回家。后来我明白了，有些人注定要留在灯塔里，好让另一些人，能够回家。\n这不是牺牲，是选择。\n灯，不能灭。轮到你了。\u300d\n\n然后你转过身，望向窗外那片被光柱一次次划破的、永恒的浓雾，静静地，等待着下一个需要方向的人。" },
+  /* ========== 消散 / 死亡 ========== */
+  E_collapse:{ ending:true, code:"E15", name:"消散", tone:"bad",
+    text:"你的神智，终于，被这个世界，磨到了尽头。\n\n那不是一个瞬间的崩溃，而是一个漫长的、你自己都未曾完全察觉的、缓慢溶解的过程。恐惧，孤独，无处不在、永不停歇的嗡鸣，还有那些，你的大脑本不该承受、却被迫一次次目睹的东西——它们像水一样，一点一点，日复一日地，漫过了你理智的堤坝，浸泡着，软化着，最终，冲垮了那道，维系着「你之为你」的，最后的防线。\n\n你想不起自己叫什么了。\n\n你想不起自己，从哪里来，为什么会在这里，又要到哪里去。\n\n「回家」——这两个字，还残留在你的意识里，可它们，已经变成了两个空洞的、失去了一切意义的音节。家？家是什么？谁在等你？为什么要回去？你，努力地想，可脑海里，只有一片，越来越浓、越来越静的，白雾。\n\n你抬起手，怔怔地看着它。\n\n这是……谁的手？\n\n你伸出手，缓缓地，摸向自己的脸——\n\n指尖下，本该是眉骨、眼窝、鼻梁、嘴唇的地方，正在，一点一点地，变得平滑，模糊，然后，彻底地，消失。你没有惊恐。你甚至，已经，感觉不到惊恐了。\n\n后来——如果「后来」还有意义的话——在后室某一层的某个角落，又多了一个，拖着一条腿、缓慢游荡的、灰白色的身影。它有胳膊，有腿，有脑袋，唯独，没有一张脸。\n\n它曾经，也是一个，会哭会笑、有名有姓、拼了命想要回家的，人。\n\n现在，它只是，后室的一部分了。\n\n而当下一个，刚刚跌落、满脸惊惶的迷路者，从它身边经过时，会像你当初那样，远远地，屏住呼吸，惊恐地，看着它——然后，庆幸地，转身离开，浑然不知，自己，正一步步，走向，和它一模一样的，结局。" },
 
-  E_drive:{ ending:true, code:"E21", name:"无尽公路", tone:"neutral",
-    text:"门后可能藏着未知，走路可能永无尽头。可那辆车——那辆插着钥匙的、随时可以发动的车——代表着一种久违的东西：掌控。掌控自己前进的方向和速度。\n\n你走过去，拉开车门，坐进驾驶座。真皮的椅子还残留着一丝暖意，仿佛主人刚刚离开。你握住方向盘，深吸一口气，拧动了钥匙。\n\n「轰——」\n\n引擎，竟然真的发动了。仪表盘的指示灯次第亮起，一切正常得不可思议。\n\n你踩下油门，车子平稳地驶出了那条车道，冲上了笔直的街道。\n\n你逃离了那片死寂的住宅区，冲上了通往地平线的公路。两旁一模一样的白色小楼，飞快地向后退去。那轮永恒的、橘红色的夕阳，始终悬在你正前方的天际，像一个永远追不上的目标。收音机里，不知何时，流淌出了一首舒缓的、你从未听过的老歌，旋律温柔而怅惘，让你莫名地，眼眶发热。\n\n你就这样，一直开，一直开。\n\n你留意到，油箱的指针，始终指在满格，纹丝不动。窗外的风景在变，又好像永远没变。太阳永远不落，公路永远向前延伸，没有尽头，也没有岔路。你不知道这条路，最终会通向哪里，会不会有一个真正的\"终点\"，会不会有一扇门，在某个你意想不到的转弯后，突然出现。\n\n但奇怪的是，你不再焦虑了。\n\n因为此刻，握着方向盘，踩着油门，听着这首温柔的歌，看着夕阳下无限延伸的公路——你是自由的。你可以决定开多快，可以决定看向窗外的哪一边，可以决定在这条无尽的路上，用什么样的心情，继续前行。\n\n在一个连方向都是奢侈品的世界里，能够\"驾驶\"，本身就是一种莫大的幸运。\n\n这就够了。你调大了收音机的音量，笑了笑，继续，朝着那轮不落的夕阳，开了下去。" },
+  E_funhouse:{ ending:true, code:"E16", name:"第四台打印机", tone:"bad",
+    text:"你无视了那行颤抖的、几乎戳破屏幕的警告，凭着一股，连你自己都无法抑制的好奇心，绕过那三台「安全」的打印机，走向了角落里，那孤零零的、第四台。\n\n它，和其他三台，一模一样。同样的型号，同样的品牌，同样安静地，覆着一层薄灰，立在那里。它没有任何异样。也许，笔记本上那个疯掉的前人，只是被这个世界，吓出了幻觉？也许，按下它，会开出一扇，通往更好地方的门？\n\n你伸出手指，按下了，它的电源键。\n\n「嗡——」\n\n它，没有像回归门那样，触发任何东西。它，缓缓地，吐出了一张纸。\n\n不是文档。是一张，照片。\n\n你拿起那张还带着余温的照片，凑到眼前——\n\n照片上，是你自己。此刻的、正低着头、正惊恐地、正盯着这张照片看的，你自己。拍摄的角度，就在你的正前方，近在咫尺。\n\n你的血液，瞬间冻结。你猛地抬起头——\n\n整个 LEVEL 4，开始，像蜡一样，融化了。\n\n那些灰色的隔间挡板，扭曲，变软，塌陷，墙面上，一张张咧到极限的、僵硬的笑脸，从融化的墙纸里，渗透出来，浮现，狞笑。惨白的日光灯，变成了疯狂闪烁的、廉价的彩灯。空气里，那股咖啡和纸张的味道，变成了发霉的蛋糕和劣质香水的甜腻。\n\n地板，在你的脚下，无声地，裂开了。\n\n无数只，苍白的、扭曲的手，从那道裂缝里，争先恐后地，伸了出来，紧紧地，抓住了你的脚踝、你的小腿、你的膝盖，用一种不容抗拒的力量，将你，向下，向那片翻涌着笑声与彩光的深渊里，拖去。\n\n你终于明白了。第四台，从来就不是通往任何地方的门。它，是 Level Fun，伸向 Level 4 的，一根，钓饵。而它钓的，就是像你这样，忍不住好奇的人。\n\n你落进了，那场永恒派对的，最深处，成了它，一名新的、永远微笑的客人。\n\n至少，从今往后，你，再也不用，为「回不回得了家」，而烦恼了。因为在这里，每一天，都是，你的生日。永远，都是。" },
 
-  E_awaken:{ ending:true, code:"E24", name:"觉醒者", tone:"good",
-    text:"你站在办公室的隔间里，笔从指间滑落，你弯下腰，指尖将触未触那冰凉的地板——\n\n就在这一刹那，你，停住了。\n\n一种极其强烈的、令人战栗的既视感，攫住了你的全身。\n\n这一幕。你经历过。\n\n不止一次。\n\n记忆的闸门，在这一瞬间轰然洞开。那些泛黄的房间，那铺天盖地的荧光灯嗡鸣，那潮湿的地毯，那没有面孔的\"人\"，那黑暗中咧开的牙齿，那金碧辉煌的酒店，那片无边的黑色海洋，那永不落幕的癫狂派对，那永恒橘红的黄昏……一段又一段的\"人生\"，一次又一次的\"死亡\"，一回又一回的\"逃离\"与\"沉沦\"，像退潮后骤然露出的、层层叠叠的礁石，全都、全都涌了上来。\n\n你想起来了。你曾无数次地，坠入那个无限的迷宫。你曾归乡，曾沉沦，曾成为探险者，曾坐进那个无脸的\"家\"，曾在灯塔上守望，曾在电梯里永恒地下坠……你死过，活过，笑过，绝望过，数不清多少个轮回。\n\n而此刻，在这个一切开始的原点，在你即将再一次\"穿模\"、再一次坠入那个循环的前一秒——\n\n你终于，认出了这一切。\n\n你终于明白了那行被水泡糊的、残缺的警告，本该说的是什么：『真正的回家门，不在任何一层的任何一扇门后。』\n\n它在这里。\n\n它在你【认出这一切】、并因此从循环中\"醒来\"的，这一个瞬间。出口从来不是一个地方，而是一种觉知。你之所以一次次被困住，是因为你一次次地，忘记了。\n\n你缓缓地，直起了腰。\n\n你没有再去够那支滚落的笔。\n\n你只是静静地站着，深深地、深深地，吸了一口气——那口气里，是咖啡的味道，是同事身上的香水味，是空调送出的、干燥而真实的风。\n\n你睁开眼。\n\n办公室的日光灯，静静地亮着，发出那熟悉的、六十赫兹的、微不可闻的嗡鸣。走廊那头，同事还在敲着键盘。窗外，城市的万家灯火，次第亮起。\n\n一切，如常。\n\n你回来了。\n\n这一次——是真的。你知道，你再也不会，坠入那个循环了。因为你终于记住了：无论走到多深、多远、多绝望的地方，只要还能\"认出\"自己，还能记得来时的路，你就永远，拥有回家的钥匙。\n\n你没有立刻回到工作。你走到窗边，把额头轻轻抵在冰凉的玻璃上，望着楼下川流不息的车灯，像望着一条流淌着光的河。你的眼眶，不知何时湿了。\n\n你知道，这段经历不会有任何人相信，你也永远不会说出口。它会成为你心底最深的一个秘密，一枚只有你自己能触碰的、滚烫的烙印。但它也永远地改变了你——从今往后，你会更用力地活着，更珍惜地爱着身边每一个真实的、会呼吸的人。因为你比世界上任何人都清楚：能够\u201c在场\u201d，能够\u201c记得\u201d，能够被人叫出名字，是一件多么奢侈、多么容易失去的事。\n\n你直起身，擦干眼角，转身走回那片温暖的灯光里。\n\n\u201c还在加班呢？\u201d有同事探过头来问。\n\n\u201c嗯，\u201d你笑了笑，声音有些发哑，却无比踏实，\u201c马上就回家。\u201d" },
+  E_skinstealer:{ ending:true, code:"E17", name:"换皮", tone:"bad",
+    text:"你的意识，太涣散了。\n\n涣散到，你已经，分不清镜子内外，分不清，哪一个，才是真正的你。镜中那张脸，一边咧着诡异的笑，一边，又和你的动作，渐渐同步，渐渐重合，像一个温柔的邀请，一个熟悉的、名为「你自己」的归宿。\n\n你怔怔地，望着镜中那张，越来越陌生、又越来越「像你」的脸，双脚，像灌了铅一样，沉重地，钉在原地，一步，也，挪不动。你的大脑，发出微弱的警报，可你的身体，早已不听使唤。\n\n那套悬空的西装，从床上，缓缓地，「站」起，无声地，向你，飘近。\n\n它没有脚步，却带着一种，无可阻挡的、耐心的从容。空荡荡的领口，对准了你的脸，越来越近，越来越近——你能感觉到，从那开口里，散发出的，一股冰冷的、空洞的、深渊般的气息。\n\n然后，它，贴上了你的脸。\n\n一阵，冰冷的、被瞬间抽离的、天旋地转的眩晕。\n\n当「你」，重新睁开眼时——\n\n「你」，正站在镜子的外面，整了整身上那套，刚刚穿上的、合身的西装，理了理领带。「你」低下头，看着镜子里，那个失魂落魄、正瘫软在地、面孔，正在飞快地变得平滑、模糊、消失的躯壳，礼貌地、满意地，点了点头。\n\n然后，「你」，拉开客房的门，迈着轻快而愉悦的步子，走进了后室的深处——去，过「你」的，人生了。它会用你的脸，你的身体，去寻找回家的路，去，回到你的家，见你的家人，睡你的床。而没有人，会发现，那，不再是你。\n\n而真正的你，被留在了，这间，永恒的客房里。\n\n没有脸。没有身体。没有名字。也，没有任何人，会来，认领。你成了一具，被丢弃的、多余的皮囊，在镜子的碎片旁，慢慢地，和这个房间，融为一体。" },
 
-  E_run_dark:{ ending:true, code:"E22", name:"窄缝尽头", tone:"bad",
-    text:"你赌它们太庞大、太笨重，跟不进狭窄的地方。你猛地拐进右边那道黑暗的、仅容一人的缝隙。\n\n你赌对了一半。\n\n身后那股汹涌的黑潮，果然在缝口处卡住了。那些庞大的身影挤作一团，发出愤怒的嘶吼和抓挠，却无法挤进这道狭窄的缝。你在黑暗中踉跄着向前，心里燃起一丝逃出生天的希望。\n\n可你很快发现，你赌错了另一半。\n\n这道缝隙，越走，越窄。\n\n起初，你还能正常地小跑。渐渐地，你不得不侧过身，才能通过。再往前，两侧冰冷、粗糙的墙壁开始摩擦你的胸口和后背，你必须吐尽肺里的空气，才能一寸一寸地，把自己挤过去。你想回头，可身后同样狭窄，同样无路可退，而缝口那头，那些东西还在耐心地、不紧不慢地等待着。\n\n你只能继续向前。缝隙还在收窄。\n\n然后，你卡住了。\n\n彻底地，卡住了。\n\n前方，缝隙窄到连你的头都无法通过；后方，你连转身抽出手臂的空间都没有。你被死死地嵌在这道冰冷的、黑暗的、岩石的缝隙里，进退不得，动弹不得。\n\n你开始挣扎，越挣扎，卡得越死。恐慌像潮水一样将你淹没。\n\n就在这时，你\"感觉\"到，两侧的墙壁，正在向内，极其缓慢地、温柔地，合拢。\n\n不，也许是错觉。也许，只是你在这绝望的黑暗里，逐渐冰冷、逐渐僵硬的身体的错觉。\n\n而缝口那头，那此起彼伏的笑声，正一点一点、极有耐心地，靠近。它们不急。它们知道，你哪儿也去不了了。" },
+  E_lightsout:{ ending:true, code:"E18", name:"一秒的光", tone:"bad",
+    text:"你再也，受不了了。\n\n这绝对的、令人窒息的、有实体般重量的黑暗，这四周无数细碎的呼吸声，这不知何时就会有什么东西贴上你后背的恐惧——它们，一点一点地，压垮了你。那个尖叫着「开灯」的念头，冲破了理智最后的堤坝。\n\n你颤抖着，掏出手电，按亮了它。\n\n只有一秒。你只想，看一眼。就一眼。\n\n就在这一秒里，雪白的光柱，「唰」地，照亮了，你近在咫尺的四周——\n\n【成百上千张脸。】\n\n它们，正无声地，紧紧地，贴着你。从你的正前方，从你的左右，从你的头顶，从你的脚下，从你呼吸可及的、每一寸空气里。密密麻麻，层层叠叠，挤挤挨挨。它们，没有眼睛，那一张张平滑而扭曲的脸上，却全都，精准地，「朝着」你。\n\n它们，一直，都在。\n\n从你踏进这一层的第一秒起，它们，就那样，安静地，耐心地，围拢着你，簇拥着你，紧贴着你，用一种，非人的耐心，等着你——等着你，撑不住，等着你，亲手，点亮，这一盏，灯。\n\n光，是它们的召唤。而你，刚刚，为它们，敲响了，晚餐的钟。\n\n你甚至，没来得及，发出，一声尖叫。\n\n手电，「啪」地，从你失力的指间，滑落。\n\n黑暗，重新，温柔地，合拢了，仿佛，什么都，没有发生过。这一层，依旧，绝对地，寂静，绝对地，漆黑。\n\n只是，又，少了一个，没能，忍到最后的，人。而那盏，掉在地上的、还亮着的手电，会一直亮着，直到电量耗尽——像一座，小小的，为下一个，忍不住的人，而点亮的，墓碑。" },
 
-  E_run_look:{ ending:true, code:"E23", name:"回头", tone:"bad",
-    text:"墙上所有的标语都在疯狂地闪烁、尖叫着同一个禁令：【别回头】。\n\n可是，在生与死的边缘，在这足以压垮一切理智的极致恐惧里，有一个念头，比求生的本能更加强烈地攫住了你——\n\n它到底，是什么？\n\n是什么东西，让整个后室都为之战栗？是什么东西，值得一整层楼的存在，只为逃离它？在你可能死去的最后一刻，你无法忍受自己，连追杀自己的东西都没有看清。\n\n你做了那件，那条走廊反复警告你【绝对不要】做的事。\n\n你，回了头。\n\n你看清了。\n\n你看清了那追在你身后的、汇聚了这个世界所有恶意的东西。\n\n可是，这里，无法描述你所看见的。\n\n没有语言能够承载它。没有比喻可以贴近它。它的存在本身，就是对\"存在\"这个概念的亵渎。你的大脑，在看见它的第一时间，就本能地、彻底地拒绝了接收这份信息——就像一台被灌入了无法解析的数据的机器，瞬间死机、崩溃。\n\n你的双腿，在那一刻，失去了所有的力气。你的思想，在那一刻，停止了运转。你甚至感觉不到恐惧了，因为恐惧，也需要一个能够运转的大脑去承载。\n\n仅仅这一次回头。仅仅这一眼。\n\n就足够了。\n\n奔跑，停止了。\n\n红色的走廊里，警示灯还在一明一灭地闪烁着。墙上那行黄黑相间的标语，在你渐渐涣散、熄灭的视野里，是你看见的最后一句话：\n\n『我们，早就，告诉过你。』" },
+  E_deep:{ ending:true, code:"E19", name:"深潜", tone:"bad",
+    text:"你的体力，在这片冰冷的、深不见底的黑水里，一点一点地，耗尽了。\n\n四肢，渐渐地，不听使唤，动作，变得，越来越迟缓，越来越无力。你的肺，像塞满了火，又像灌满了铅，每一次，想要划水的努力，都换来一阵，更深的窒息。\n\n那道海底的、透着幽蓝微光的裂隙，明明，就在下方，明明，那么近了——可你发现，你，再也，游不动了。\n\n你想往上浮。\n\n可是——哪里，是「上」？\n\n四周，是同样的，蓝黑色的幽暗。上，下，左，右，在这片深海里，失去了所有的坐标。你像一片，被水流温柔裹挟的落叶，缓缓地，旋转着，沉浮着，分不清方向。传说中，那条海底的、通往更深处的路，成了，压垮你的，最后一根，稻草——你潜得太深了，深到，你所有的力气，都用在了「下潜」，而没有,给自己，留下，一丝，浮回水面的，余地。\n\n意识，开始，一阵阵地，发白，涣散，变得，温暖而恍惚。缺氧的痛苦，渐渐地，消退了，取而代之的，是一种，奇异的、宁静的，平和。\n\n就在这，溶进黑暗的，最后一刻——\n\n你仿佛，看见，在下方，极远、极远的地方，亮起了，一盏，温暖的、橘黄色的、家一样的，灯。\n\n它，那么近。又，那么远。\n\n你,用尽,最后一丝力气,朝着那盏灯,那个方向,缓缓地,伸出了,手。\n\n然后，冰冷的海洋，温柔地，合拢了，托起了你，像一位，古老的母亲，抱起了她，疲惫的孩子，带着你，缓缓地，沉向了，那片，再没有恐惧、也，再没有归途的，永恒的，深蓝。" },
+
+  E_ratswarm:{ ending:true, code:"E20", name:"退潮", tone:"bad",
+    text:"你转身，就跑。\n\n这，是你，在这一层，犯下的，唯一，也是，最致命的，错误。\n\n惊动一个，用尽全速去逃的猎物，对一个庞大的鼠群而言，不是威胁，而是，冲锋的号角。\n\n身后的黑暗，「活」了过来——\n\n成千上万只『死亡鼠』，如同一片，决了堤的、黑色的潮水，从甬道的深处，从岩壁的每一道缝隙里，汹涌而出，瞬间，覆盖了岩壁，覆盖了地面，覆盖了倒悬的钟乳石，覆盖了，你视野里的，一切。密集到，令人头皮炸裂的、尖锐的「吱吱」声，汇成了一片，实质般的，声浪。\n\n你朝着，来时的方向，那道，你钻进来的海底裂隙，拼了命地，冲刺。你的脚下，身侧，头顶，全是，攒动的、闪着幽光的、红宝石般的，眼睛，和，冰冷的、饥饿的，牙齿。\n\n你能感觉到，它们，爬上了你的鞋，你的裤腿，你的后背。\n\n你的指尖，终于，触到了，来路那道岩缝的，边缘——\n\n就差，一点。\n\n就差，一点点。\n\n黑潮，从你的脚下，从你的四面八方，汹涌地，漫了上来，温热的，密不透风的，铺天盖地的。你被，彻底地，淹没了。\n\n你最后看见的，是那道岩缝，透进来的，一小片，遥远的，微光——它，被无数细小的、攒动的身影，一寸，一寸地，遮蔽，吞没，直至，彻底，熄灭。\n\n洞穴，重归，寂静。仿佛，从未，有人，来过。只有，那片，缓缓退去的，黑潮，和地上，一具，很快就会，被啃食得，只剩，白骨的，证明。" },
+
+  E_cavein:{ ending:true, code:"E21", name:"寂静的塌方", tone:"bad",
+    text:"你,当机立断,熄灭了手电,把自己,死死地,塞进,岩壁的一处,凹陷里,屏住了,呼吸。\n\n你把身体,蜷缩成,最小的一团,让自己,和这片,冰冷的,岩石,融为一体。你控制着,自己的每一次呼吸,让它,轻得,像不存在。你甚至,努力地,放慢了,自己的,心跳。\n\n鼠群,贴着你的鞋边,汹涌而过。一波,又一波。\n\n那尖锐的「吱吱」声,那无数细爪掠过岩石的沙沙声,那股浓重的腥膻气味,从你身边,潮水般地,涌过。你能感觉到,它们温热的身体,擦过你的裤脚,却,没有一只,停下。\n\n你成功了。\n\n在绝对的黑暗,和绝对的静止里,它们,这些依靠听觉与嗅觉、在黑暗中疯狂涌动的生物,竟然,没有,发现你。渐渐地,那声浪,远去了,低了,散了。你,活了下来。你甚至,能听见,自己那颗,狂跳的心,一下,一下地,重新,慢了下来。\n\n你,几乎,要,喜极而泣。\n\n可就在这时——就在你,刚刚,松开那口,提了太久的气,准备,从凹陷里,钻出来的,这个瞬间——\n\n你的头顶,传来,一阵,细微的、令人牙酸的,碎裂声。\n\n「咔啦……咔……」\n\n成千上万只鼠爪,方才那一阵,疯狂的刨挖与冲撞,早已,让这段,本就,年久失修、脆弱不堪的,洞顶,承受到了,极限。\n\n一声,沉闷的,巨响。\n\n岩石,崩落。\n\n在绝对的黑暗中,你,甚至,没来得及,看清,是什么,砸了下来,没来得及,发出,一声,惊呼。\n\n洞穴,重归,死寂。尘埃,在黑暗里,缓缓地,落定。仿佛,你,从未,来过,这里。\n\n有些危险,不来自,任何,张牙舞爪的实体。它,只来自,这个,古老而漠然的世界,对一条,侥幸活下来的生命,漫不经心的、随手的,轻轻,一挥。" },
+
+  E_run_out:{ ending:true, code:"E22", name:"破晓", tone:"good",
+    text:"你赌上了一切,一头,冲进了,左边,那条,更明亮的,岔路。\n\n身后,那股,黑色的、癫狂的洪流,嘶吼着,扑了个空,巨大的惯性,让它,重重地,撞在了岔路口的墙上。\n\n光,越来越强,越来越白。\n\n它,不再是,后室里,那种,惨白、廉价、令人心悸的灯光。它,是暖的。它,越来越亮,亮到,刺痛了你的双眼,亮到,吞没了走廊,吞没了标语,吞没了身后的追兵,吞没了,那永不停歇的笑声,吞没了,后室的,一切——\n\n然后,是,鸟叫。\n\n清脆的,婉转的,真实的,鸟叫。\n\n你,猛地,睁开眼。\n\n发现,自己,正趴在,一片,清晨的,草地上。冰凉的、带着青草香的露水,打湿了你的脸颊,浸透了你的衣衫。你的手指,深深地,抠进,湿润而柔软的,泥土里。\n\n远处,传来,早班公交车,进站的,报站声。有晨跑者的,脚步声,由远及近,又,由近及远。有小贩,推着车,叫卖早点的,吆喝。你,趴在,一座,真实城市的、街心公园的,草坪上。\n\n阳光,刚刚,爬上,东边的楼顶,金色的、温暖的光,洒在你的背上。\n\n没有人,知道,你,刚刚,从一个,什么样的地方,逃了出来。他们,只当,你是,一个,睡在公园里的、有点古怪的,醉汉。\n\n你,也,永远,不会,告诉,任何人。\n\n你只是,仰面,躺了下来,四肢摊开,贪婪地,大口大口地,呼吸着,这世上,最普通、也最珍贵的,空气。你望着,头顶,那片,会流动、会变色、有飞鸟掠过的、真实无比的,天空——\n\n然后,眼泪,毫无预兆地,毫无道理地,从你的眼角,汹涌而出,滑过太阳穴,滴进,身下的草地里。\n\n你,活下来了。你,回来了。而这个,清晨,这片,天空,这声,鸟叫,将是,你,余生,再也,不会,忘记的,东西。" },
+
+  E_run_dark:{ ending:true, code:"E23", name:"窄缝尽头", tone:"bad",
+    text:"你,钻进了,右边,那道,黑暗的、狭窄的,缝隙。你赌,那些庞大的追兵,跟不进,这样窄的地方。\n\n你,赌对了,一半。\n\n身后,那股,黑色的洪流,确实,被,死死地,卡在了,缝隙的入口。那些,爪子,那些,扭曲的,笑声,那些,伸进来的、苍白的手,都被,牢牢地,阻隔在了,后面。你听着,那阵,近在咫尺、却,再也,无法,前进,一步的,咆哮与嘶鸣,靠在,冰冷的,岩壁上,大口喘着气,劫后余生的,庆幸,让你的,双腿,一阵,发软。\n\n你活下来了。你以为。\n\n可是,你,没有料到——\n\n这条,缝隙,越往里走,越窄。\n\n起初,你还能,正常地,行走。然后,你,不得不,侧过身。再然后,你,不得不,吐尽,肺里的,每一口气,才能,把胸腔,压扁,一寸,一寸地,向前,挤过去。冰冷的岩壁,从两侧,紧紧地,贴着你的胸口和后背,粗糙,而,冰冷。\n\n而它,还在,继续,收窄。\n\n然后,你,卡住了。\n\n前,进不得,一丝一毫。后,退不得,分寸——你甚至,已经,无法,把胸腔,重新,鼓起来,吸上,一口,完整的,气。\n\n你,被,牢牢地,楔在了,这条,永恒的,石缝里。\n\n冰冷的岩壁,从两侧,缓缓地、温柔地、不可阻挡地,向你,收拢,收拢。你的,呼吸,越来越浅,越来越急。\n\n而在,遥远的,缝隙的,那一头,那阵,被你,甩下的,笑声,正,一点,一点地,极有耐心地,重新,靠近。\n\n它们,有的是,时间。\n\n它们,知道,你,哪儿,也,去不了了。" },
+
+  E_run_look:{ ending:true, code:"E24", name:"回头", tone:"bad",
+    text:"在,生与死的,一线之间,在,那条走廊,反反复复、用尽一切方式,警告你【绝对不要】做的那件事上——\n\n你,回了头。\n\n只是,一瞬。只是,一个,人类,最本能的、想要知道「究竟是什么在追我」的,回头。\n\n你,终于,看清了。\n\n你看清了,那,一直,追在你身后、驱赶着你、让你,拼了命,奔跑的,东西,究竟,是,什么。\n\n可是——\n\n这里,无法,描述,你,所看见的。\n\n没有,任何,人类的,语言,任何,已知的,概念,能够,承载,那个,景象。你的,大脑,在,看清它的,那一刹那,拒绝了,接收它。你的,理智,像一根,被瞬间,拉断的,弦。你的,双腿,在那一瞬,失去了,全部的,力气,和,意义。\n\n你,甚至,连,恐惧,都,来不及,感受。\n\n因为,恐惧,是,一种,需要,大脑,去,理解、去,处理的,情绪。而,你,看见的,那个东西,超越了,理解的,一切,边界。\n\n仅仅,这一次,回头,就,已经,足够了。\n\n奔跑,停止了。\n\n血红色走廊,尽头的,标语,还在,一明,一灭地,闪烁着,像,一句,迟到了,太久、也,再无意义的,墓志铭:\n\n【我们,早就,告诉过你。】\n\n【别,回头。】" },
 });
 
 /* =========================================================
