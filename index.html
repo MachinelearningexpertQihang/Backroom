@@ -167,6 +167,19 @@
   .choice .cost{float:right;font-family:"Special Elite",monospace;font-size:11px;color:var(--lamp-dim);margin-left:8px}
   .choice.locked .cost{color:var(--rust)}
   .choice.sip{border-style:dashed;opacity:.92}
+  .crisis{margin:12px 0 4px;display:none}
+  .crisis.show{display:block}
+  .crisis .clabel{font-family:"Special Elite",monospace;font-size:13px;color:var(--rust);
+    letter-spacing:2px;margin-bottom:6px;animation:blinkc .8s infinite}
+  @keyframes blinkc{0%,100%{opacity:1}50%{opacity:.4}}
+  .crisis .cbar{height:7px;background:rgba(0,0,0,.45);border:1px solid var(--rust)}
+  .crisis .cbar i{display:block;height:100%;background:var(--rust);width:100%;transition:width .1s linear}
+  .stat .num{font-family:"Special Elite",monospace;font-size:11px;margin-left:5px;color:var(--paper-dim)}
+  .ctabs{display:flex;gap:8px;margin-bottom:12px}
+  .ctab{flex:1;padding:9px;background:transparent;border:1px solid var(--line);color:var(--paper-dim);
+    font-family:inherit;font-size:13px;letter-spacing:2px;cursor:pointer;transition:all .2s}
+  .ctab.on{color:var(--lamp);border-color:var(--lamp)}
+  .erow small{display:block;font-size:11px;color:var(--paper-dim);margin-top:4px;line-height:1.8}
   .skiphint{margin:14px 0 2px;font-family:"Special Elite",monospace;font-size:12px;
     color:var(--lamp-dim);letter-spacing:1px;cursor:pointer;opacity:.7;user-select:none;
     transition:opacity .3s;display:none}
@@ -210,9 +223,9 @@
   <div class="mdesc">神智会流失，杏仁水会喝完，手电会熄灭。<br>浅层有平庸的归途，深渊尽头藏着真正的门。<br>这一次，你打算走多深？</div>
   <button class="mbtn" id="btnNew">▶&nbsp;&nbsp;新的下探</button>
   <button class="mbtn" id="btnCont" style="display:none">↻&nbsp;&nbsp;继续上次的下探</button>
-  <button class="mbtn" id="btnCodexM">☰&nbsp;&nbsp;结局图鉴</button>
+  <button class="mbtn" id="btnCodexM">☰&nbsp;&nbsp;图鉴：结局 / 实体</button>
   <button class="mbtn" id="btnSoundM">🔇&nbsp;&nbsp;环境音：关</button>
-  <div class="mfoot"><span id="menuProg"></span> · v2.0 下探重构版</div>
+  <div class="mfoot"><span id="menuProg"></span> · 进度自动保存在本地浏览器 · v2.3</div>
 </div>
 <div class="tube-wrap"><div class="tube" id="tube"></div></div>
 
@@ -220,6 +233,7 @@
   <div class="hud" id="hud"></div>
   <div class="scene" id="scene"></div>
   <div class="skiphint" id="skiphint">▸ 轻触正文，显示全文</div>
+  <div class="crisis" id="crisis"><div class="clabel" id="clabel">⚠</div><div class="cbar"><i id="cfill"></i></div></div>
   <div class="choices" id="choices"></div>
 </div>
 
@@ -228,7 +242,7 @@
     <button class="tbtn" id="menuBtn">⌂ 菜单</button>
     <button class="tbtn" id="soundBtn">🔇 环境音</button>
     <button class="tbtn" id="speedBtn">⌛ 打字机</button>
-    <button class="tbtn" id="codexBtn">☰ 结局图鉴</button>
+    <button class="tbtn" id="codexBtn">☰ 图鉴</button>
     <button class="tbtn" id="restartBtn">↻ 重来</button>
     <span class="progress" id="prog"></span>
   </div>
@@ -237,7 +251,7 @@
 <div class="modal" id="modal">
   <div class="codex">
     <button class="close-x" id="closeBtn" aria-label="关闭">✕</button>
-    <h2>结局图鉴</h2>
+    <div class="ctabs"><button class="ctab on" id="tabEnd">结局图鉴</button><button class="ctab" id="tabBst">实体图鉴</button></div>
     <div class="sub" id="codexSub"></div>
     <div class="egrid" id="egrid"></div>
   </div>
@@ -253,6 +267,8 @@ const STORY = {};
 
 /* ---- 状态 ---- */
 const FRESH = () => ({ san:100, water:2, light:100, depth:0, flags:{}, seed:Math.floor(Math.random()*1e9) });
+/* 深度流失：越深，每一步掉的神智越多 */
+function depthDrain(d){ return d<=0?0 : d<=2?1 : d<=4?2 : d<=6?3 : d<=8?4 : 5; }
 let S = FRESH();
 function clampS(){ S.san=Math.max(0,Math.min(100,S.san)); S.light=Math.max(0,Math.min(100,S.light)); S.water=Math.max(0,S.water); }
 
@@ -318,6 +334,26 @@ const CKPT_KEY="backrooms_descend_ckpt_v1";
 function saveCkpt(k){ try{ localStorage.setItem(CKPT_KEY, JSON.stringify({k:k, s:S})); }catch(e){} }
 function loadCkpt(){ try{ return JSON.parse(localStorage.getItem(CKPT_KEY)); }catch(e){ return null; } }
 function clearCkpt(){ try{ localStorage.removeItem(CKPT_KEY); }catch(e){} }
+let lastSafe=null;
+function saveCkptObj(o){ try{ localStorage.setItem(CKPT_KEY, JSON.stringify(o)); }catch(e){} }
+
+/* ---- 实体图鉴（遭遇解锁，跨局保存） ---- */
+const BST_KEY="backrooms_descend_bst";
+function loadMet(){ try{ return JSON.parse(localStorage.getItem(BST_KEY))||[]; }catch(e){ return []; } }
+function meetEntity(id){ const m=loadMet(); if(!m.includes(id)){ m.push(id); try{ localStorage.setItem(BST_KEY,JSON.stringify(m)); }catch(e){} } }
+const BESTIARY=[
+ {id:"faceling",name:"无脸人 · Faceling",tone:"中立",cls:"t-neutral",desc:"后室最常见的居民。多数对人漠不关心，少数会笨拙地模仿人类的生活。没有五官，却似乎「看」得见你。据说，它们曾经，都是人。"},
+ {id:"meg",name:"M.E.G. · 大流浪者探险组",tone:"友善",cls:"t-good",desc:"由幸存者组成的互助组织：绘制地图、储备物资、收留迷路者。在这个磨损人性的世界里，他们是「人还可以是人」的证据。"},
+ {id:"trader",name:"流浪商人",tone:"友善",cls:"t-good",desc:"推着一辆吱呀作响的购物车往返于浅层之间的人类。价格公道，消息灵通。他说他不想回家了——「回去干嘛？这儿多清静。」"},
+ {id:"raider",name:"掠夺者",tone:"敌对",cls:"t-bad",desc:"放弃了回家、转而劫掠同类为生的人。比大多数实体更危险——因为他知道你在想什么，也知道你在怕什么。"},
+ {id:"hound",name:"猎犬 · Hound",tone:"敌对",cls:"t-bad",desc:"Level 2 的群猎者。目盲，听觉敏锐到能锁定心跳。成群巡逻，畏惧高温与蒸汽。猎杀成功率，接近百分之百。"},
+ {id:"skinstealer",name:"偷皮者 · Skin-Stealer",tone:"敌对",cls:"t-bad",desc:"没有自己的形体，永恒渴求一张真正的脸。借镜子与衣物设伏，模仿你的动作，直到你分不清哪个才是自己。强光与杏仁水可短暂驱退。"},
+ {id:"partygoer",name:"派对客 · Partygoer",tone:"敌对",cls:"t-bad",desc:"Level Fun 的永久住客，笑容缝在脸上。它们不杀你——它们只是把每个来客当成寿星，然后永远、永远不让你离开。"},
+ {id:"lightfeeder",name:"光中饥影",tone:"敌对",cls:"t-bad",desc:"栖息于 Level 6 的绝对黑暗，以光为食。平时盲目漂浮，任何一点光亮都会瞬间引来整群。从未有目击者活着描述过它们的样子。"},
+ {id:"deathrat",name:"死亡鼠 · Death Rats",tone:"敌对",cls:"t-bad",desc:"Level 8 的清道夫，数以万计，几秒内可将活物啃成白骨。世代生于黑暗，畏惧强光——但只畏惧【移动的】强光。"},
+ {id:"moth",name:"引路蛾",tone:"友善",cls:"t-good",desc:"翼上带着淡金微光的大型飞蛾，出没于无限海洋的礁石之间。似乎对迷路者抱有善意，会引路至藏有补给的角落。不要试图捕捉它。"},
+ {id:"chaser",name:"追赶者（？）",tone:"未知",cls:"t-neutral",desc:"Level ! 的存在。没有人知道它（们）是什么——所有回头看过的人，都没能再开口。唯一确定的信息写在墙上：RUN。"}
+];
 
 /* ---- 短音效 ---- */
 function sfx(freq,dur,type,vol){
@@ -337,6 +373,39 @@ function sfxEnd(tone){
   if(tone==="good"){ [523,659,784,1046].forEach((f,i)=>setTimeout(()=>sfx(f,0.6,"sine",0.045),i*170)); }
   else if(tone==="bad"){ sfx(98,1.6,"sawtooth",0.05); setTimeout(()=>sfx(93,1.8,"sawtooth",0.04),140); setTimeout(()=>sfx(49,2.2,"sine",0.06),300); }
   else { sfx(392,0.5,"sine",0.045); setTimeout(()=>sfx(330,0.8,"sine",0.04),220); }
+}
+
+/* ---- 心跳 ---- */
+let hbIv=null;
+function thump(){ if(!soundOn||!actx)return; sfx(52,0.16,"sine",0.12); setTimeout(()=>sfx(46,0.12,"sine",0.08),120); }
+function startHeart(ms){ if(!soundOn)return; clearInterval(hbIv); hbIv=setInterval(thump,ms); thump(); }
+function stopHeart(){ clearInterval(hbIv); hbIv=null; }
+function updateHeart(){
+  if(!soundOn){ stopHeart(); return; }
+  if(crisisIv) return; /* 危机期间由危机系统控制 */
+  if(S.san<=25 && pendingNode && !pendingNode.ending) startHeart(820); else stopHeart();
+}
+
+/* ---- 限时危机（超时即死） ---- */
+let crisisIv=null, crisisEnd=0;
+function startCrisis(node){
+  document.getElementById("crisis").classList.add("show");
+  crisisEnd=Date.now()+node.timer*1000;
+  setAmbience("panic");
+  startHeart(430);
+  clearInterval(crisisIv);
+  crisisIv=setInterval(()=>{
+    const left=crisisEnd-Date.now();
+    const frac=Math.max(0,left/(node.timer*1000));
+    document.getElementById("cfill").style.width=(frac*100)+"%";
+    document.getElementById("clabel").textContent="⚠ 快选！剩余 "+Math.max(0,Math.ceil(left/1000))+" 秒";
+    if(left<=0){ const to=node.timeout; endCrisis(); go(to); }
+  },100);
+}
+function endCrisis(){
+  clearInterval(crisisIv); crisisIv=null;
+  document.getElementById("crisis").classList.remove("show");
+  stopHeart();
 }
 
 /* ---- 状态涨落反馈（让道具"看得见"）---- */
@@ -418,7 +487,14 @@ const AMB={
   deep(){ const arr=[261.6,392,523.2].map(x=>{ const o=O("sine",x),g=G(0.01); o.connect(g);g.connect(master); return reg(o); });
     const lfo=O("sine",0.1),lg=G(4); lfo.connect(lg); arr.forEach(o=>lg.connect(o.detune)); return arr.concat([reg(lfo)]); },
   runner(){ const o=O("sine",50),g=G(0.0); o.connect(g);g.connect(master); const lfo=O("square",2.6),lg=G(0.05); lfo.connect(lg);lg.connect(g.gain);
-    const o2=O("sawtooth",70),g2=G(0.012),lp=Fl("lowpass",300); o2.connect(lp);lp.connect(g2);g2.connect(master); return [reg(o),reg(lfo),reg(o2)]; }
+    const o2=O("sawtooth",70),g2=G(0.012),lp=Fl("lowpass",300); o2.connect(lp);lp.connect(g2);g2.connect(master); return [reg(o),reg(lfo),reg(o2)]; },
+  panic(){ const o=O("sine",55),g=G(0.0); o.connect(g);g.connect(master);
+    const lfo=O("square",4.2),lg=G(0.09); lfo.connect(lg);lg.connect(g.gain);
+    const s1=O("sawtooth",622),s2=O("sawtooth",659),sg=G(0.006),hp=Fl("highpass",500);
+    s1.connect(hp);s2.connect(hp);hp.connect(sg);sg.connect(master);
+    const n=nz(),bp=Fl("bandpass",900,1.2),ng=G(0.009),l2=O("sine",0.5),l2g=G(700);
+    n.connect(bp);bp.connect(ng);ng.connect(master); l2.connect(l2g);l2g.connect(bp.frequency);
+    return [reg(o),reg(lfo),reg(s1),reg(s2),reg(n),reg(l2)]; }
 };
 function stopAmb(){ ambNodes.forEach(n=>{ try{n.stop&&n.stop();}catch(e){} try{n.disconnect&&n.disconnect();}catch(e){} }); ambNodes=[]; }
 function setAmbience(key){ if(!soundOn||!actx) return; if(key===curAmb) return; curAmb=key; stopAmb(); run((AMB[key]||AMB.hum)()); }
@@ -444,8 +520,8 @@ function bgmFor(node){
 }
 function toggleSound(){
   if(!ensureCtx()) return;
-  if(soundOn){ soundOn=false; stopAmb(); curAmb=null; }
-  else{ if(actx.state==="suspended")actx.resume(); soundOn=true; setAmbience(bgmFor(pendingNode)); }
+  if(soundOn){ soundOn=false; stopAmb(); stopHeart(); curAmb=null; }
+  else{ if(actx.state==="suspended")actx.resume(); soundOn=true; if(crisisIv){ setAmbience("panic"); startHeart(430); } else { setAmbience(bgmFor(pendingNode)); updateHeart(); } }
   const b=document.getElementById("soundBtn");
   b.classList.toggle("on",soundOn); b.textContent=soundOn?"🔊 环境音":"🔇 环境音";
   const mb=document.getElementById("btnSoundM");
@@ -456,12 +532,13 @@ function toggleSound(){
 function updateTube(){
   document.body.classList.toggle("dim",S.san<=55);
   document.body.classList.toggle("critical",S.san<=25);
+  updateHeart();
 }
 
 /* ---- HUD ---- */
 function barColor(v,g,m){ return v>60?g:(v>30?m:"var(--rust)"); }
-function stat(label,v,color,warn){
-  return `<div class="stat${warn?' warn':''}"><b>${label}</b><span class="bar"><i style="width:${Math.max(0,Math.min(100,v))}%;background:${color}"></i></span></div>`;
+function stat(label,v,color,warn,suf){
+  return `<div class="stat${warn?' warn':''}"><b>${label}</b><span class="bar"><i style="width:${Math.max(0,Math.min(100,v))}%;background:${color}"></i></span><span class="num">${Math.round(v)}${suf||""}</span></div>`;
 }
 function renderHUD(node){
   const h=document.getElementById("hud");
@@ -471,9 +548,9 @@ function renderHUD(node){
   h.innerHTML =
     `<div class="loc"><span class="lv">${node.level||""}</span><span class="nm">${node.title||""}</span></div>`+
     depTxt+
-    stat("神智",S.san,barColor(S.san,"var(--moss)","var(--lamp)"),S.san<=25)+
+    stat("神智",S.san,barColor(S.san,"var(--moss)","var(--lamp)"),S.san<=25,"")+
     `<div class="stat"><b>杏仁水</b><span style="color:${S.water>0?'var(--lamp)':'var(--rust)'};font-family:'Special Elite'">×${S.water}</span></div>`+
-    stat("手电",S.light,barColor(S.light,"var(--lamp)","var(--lamp-dim)"),S.light<=20);
+    stat("手电",S.light,barColor(S.light,"var(--lamp)","var(--lamp-dim)"),S.light<=20,"%");
 }
 
 /* ---- 渲染 ---- */
@@ -481,14 +558,19 @@ let pendingNode=null;
 function go(key,restore){
   const node=STORY[key];
   if(!node){ console.warn("missing",key); return; }
+  if(crisisIv) endCrisis();
+  if(node.redirect){ go(node.redirect(S),restore); return; }
   const before={san:S.san,water:S.water,light:S.light};
   if(node.onEnter&&!restore) node.onEnter(S);
+  if(!restore && !node.ending) S.san-=depthDrain(node.dep!==undefined?node.dep:S.depth);
+  if(node.meet && !restore) node.meet.forEach(meetEntity);
   clampS();
   if(node.dep!==undefined) S.depth=node.dep;
   // 神智归零 → 精神消散（除非本身是结局）
   if(!node.ending && S.san<=0){ feedback(before); setTimeout(()=>go("E_collapse"),300); updateTube(); return; }
   if(!restore) feedback(before);
-  if(node.ending) clearCkpt(); else saveCkpt(key);
+  if(node.ending){ if(lastSafe) saveCkptObj(lastSafe); }
+  else { lastSafe={k:key, s:JSON.parse(JSON.stringify(S))}; saveCkptObj(lastSafe); }
   updateTube();
   setAmbience(bgmFor(node));
   renderHUD(node);
@@ -502,6 +584,7 @@ function go(key,restore){
 function renderChoicesNow(){
   const node=pendingNode; if(!node) return;
   const box=document.getElementById("choices"); box.innerHTML="";
+  if(node.timer && !node.ending && !crisisIv) startCrisis(node);
   if(node.ending){
     document.getElementById("hud").style.display="none";
     clearEndingDom();
@@ -516,6 +599,15 @@ function renderChoicesNow(){
     const foot=document.createElement("div"); foot.className="ending-foot";
     foot.textContent=`—— 你已发掘 ${loadUnlocked().length} / ${totalEndings()} 种结局 · 深度 -${S.depth} 层 ——`;
     box.appendChild(foot);
+    if(node.tone!=="good"){
+      const foot2=document.createElement("div"); foot2.className="ending-foot";
+      foot2.textContent="※ 死前的进度已自动保存 —— 主菜单 › 继续上次的下探，可从那一步重来";
+      box.appendChild(foot2);
+    }
+    const rck=lastSafe||loadCkpt();
+    if(rck) addBtn(box,"↩ 读档：回到死亡前的抉择",()=>{
+      S=JSON.parse(JSON.stringify(rck.s)); clearEndingDom();
+      document.getElementById("hud").style.display="flex"; go(rck.k,true); });
     addBtn(box,"再入后室",()=>restart());
     addBtn(box,"翻开结局图鉴",()=>openCodex());
     return;
@@ -551,7 +643,12 @@ function addBtn(box,label,fn){ const b=document.createElement("button");
 function allEndings(){ return Object.values(STORY).filter(n=>n.ending).sort((a,b)=>a.code.localeCompare(b.code)); }
 function totalEndings(){ return allEndings().length; }
 function refreshProgress(){ document.getElementById("prog").textContent=`结局 ${loadUnlocked().length}/${totalEndings()}`; }
-function openCodex(){
+function setTab(which){
+  document.getElementById("tabEnd").classList.toggle("on",which==="end");
+  document.getElementById("tabBst").classList.toggle("on",which==="bst");
+}
+function renderEndTab(){
+  setTab("end");
   const u=loadUnlocked(), list=allEndings();
   document.getElementById("codexSub").textContent=`已发掘 ${u.length} / ${list.length} · 存档保存在本地浏览器`;
   const g=document.getElementById("egrid"); g.innerHTML="";
@@ -563,21 +660,38 @@ function openCodex(){
       (found?`<span class="erar ${rc}">${({good:"生还",neutral:"未定",bad:"消散"}[n.tone])}</span>`:"");
     g.appendChild(row);
   });
-  document.getElementById("modal").classList.add("show");
 }
+function renderBstTab(){
+  setTab("bst");
+  const met=loadMet();
+  document.getElementById("codexSub").textContent=`已遭遇 ${met.length} / ${BESTIARY.length} · 活着遇见它们，才会留下记录`;
+  const g=document.getElementById("egrid"); g.innerHTML="";
+  BESTIARY.forEach((e,i)=>{
+    const found=met.includes(e.id);
+    const row=document.createElement("div"); row.className="erow"+(found?"":" locked");
+    row.innerHTML=`<span class="code">№${String(i+1).padStart(2,"0")}</span>`+
+      (found?`<span class="ename">${e.name}<small>${e.desc}</small></span><span class="erar ${e.cls}">${e.tone}</span>`
+            :`<span class="ename">？？？ 未遭遇</span>`);
+    g.appendChild(row);
+  });
+}
+function openCodex(){ renderEndTab(); document.getElementById("modal").classList.add("show"); }
 function closeCodex(){ document.getElementById("modal").classList.remove("show"); }
-function restart(){ addRun(); S=FRESH(); clearCkpt(); clearEndingDom(); document.getElementById("hud").style.display="flex"; go("title"); }
+function restart(){ if(crisisIv) endCrisis(); addRun(); S=FRESH(); clearCkpt(); clearEndingDom(); document.getElementById("hud").style.display="flex"; go("title"); }
 
 /* ---- 事件 ---- */
 document.getElementById("soundBtn").onclick=toggleSound;
 document.getElementById("codexBtn").onclick=openCodex;
 document.getElementById("restartBtn").onclick=restart;
 document.getElementById("closeBtn").onclick=closeCodex;
+document.getElementById("tabEnd").onclick=()=>{ sfxClick(); renderEndTab(); };
+document.getElementById("tabBst").onclick=()=>{ sfxClick(); renderBstTab(); };
 document.getElementById("modal").onclick=e=>{ if(e.target.id==="modal") closeCodex(); };
 document.getElementById("scene").onclick=skipType;
 document.getElementById("skiphint").onclick=skipType;
 /* ---- 主菜单 ---- */
 function showMenu(){
+  if(crisisIv) endCrisis();
   const m=document.getElementById("menu"); m.classList.add("show");
   const ck=loadCkpt();
   document.getElementById("btnCont").style.display=ck?"block":"none";
@@ -622,8 +736,8 @@ Object.assign(STORY, {
       { t:"屏住呼吸，先判断那声音是什么", go:"L0_event" }
     ]
   },
-  L0_event:{
-    dep:0, level:"LEVEL 0", title:"大厅",
+  L0_face:{
+    meet:["faceling"], dep:0, level:"LEVEL 0", title:"大厅",
     text:"你僵在原地，把呼吸压到最低，侧耳去听。\n\n拖拽声一下、一下，不紧不慢，绕过一道看不见的墙，出现在了相邻的房间。你透过没有门板的门框，终于看清了它——\n\n那是一个灰白色的人形。它有胳膊，有腿，有脑袋，个头和普通成年人相差无几，动作却僵硬得像一具被劣质丝线操纵的提线木偶。它拖着一条腿，一步，一顿，缓慢地挪动，每一步都在地毯上留下一道浅浅的、很快又弹回原状的压痕。\n\n当它的「脸」转向你这一侧时，你的血液在那一瞬间彻底冻住了。\n\n那张脸上，【什么都没有】。没有眼睛，没有鼻子，没有嘴，没有一丝一毫的起伏。只有一整片平滑的、像是被一块巨大的橡皮反复擦拭过的皮肤，在荧光灯下泛着死人般的青白。这就是后室里最常见、也最令人心底发毛的居民——『无脸人（Faceling）』。\n\n它似乎「察觉」到了什么，那张空白的脸对准了你藏身的方向，停顿了很久很久。你能听见自己的心跳撞击着肋骨，冷汗顺着后颈一滴滴滑进衣领。你不知道一个没有眼睛的东西是怎么「看」的，你只知道，此刻你绝不能动，绝不能出声。\n\n时间被拉得无限长。终于，它像是失去了兴趣，又像是从一开始就没真正注意到你，缓缓转过身，继续拖着那条腿，消失在房间的另一头。拖拽声渐渐远去，可你僵硬的双腿，过了好久才敢重新迈动。",
     choices:[
       { t:"朝它离开的反方向走，尽快远离", go:"L0_fork" },
@@ -695,7 +809,7 @@ Object.assign(STORY, {
     ]
   },
   MEG_enter:{
-    dep:1, level:"LEVEL 1", title:"M.E.G. 前哨站",
+    meet:["meg"], dep:1, level:"LEVEL 1", title:"M.E.G. 前哨站",
     onEnter:s=>{ s.san+=18; s.water+=1; s.light=Math.min(100,s.light+25); },
     text:s=>"你循着那点晃动的灯光，小心翼翼地走过去。转过几排货架，一座由书架、旧沙发、铁皮柜和路障堆叠而成的堡垒，出现在了你眼前。堡垒的入口用红色喷漆歪歪扭扭地写着『M.E.G. β-7』——那是『M.E.G.（大流浪者探险组，The Major Explorer Group）』留在这一层的前哨站，一个由后室幸存者们自发组成的、松散却顽强的组织。\n\n几名衣衫褴褛、脸上带着风霜的幸存者立刻警惕地围了上来，手里握着削尖的钢管。他们绕着你转了一圈，逼你说话、逼你回答一些只有「人」才懂的问题，反复确认你不是某种伪装成人形的实体之后，紧绷的气氛才缓和下来。\n\n他们收留了你。有人递来一块干硬的压缩饼干和半瓶清水，有人往你怀里塞了一节还有电的备用电池。围着一盏暖黄色的营灯，一位被大家称作「老向导」的中年女人，打量着你这张还没被后室磨平的脸，缓缓开口：\n\n「新来的？能活着摸到这儿，运气不算差。」她往火堆里添了根柴，火光在她眼里跳动，「想回家的话，路子有几条。最近的一条，就在下面第四层，一间大得没边的办公室里——找到那儿的打印机，按对三台，能开出一扇回家的门。简单，稳妥。可那扇门送你回去的，也就只是你原来那种日子而已。」\n\n她顿了顿，声音压低了些：「也有人说，越往深处走，藏着越『干净』的出口，能把人送回真正想回去的地方。可那种深度……」她摇摇头，「十个下去，九个再没上来过。剩下那一个，回来时也疯了。你自己，掂量着办。」"+(getRuns()>=2?"\n\n临别时，她忽然攥住你的手腕，浑浊的眼睛死死盯着你的脸，看了很久很久。「奇怪，」她低声说，声音有点发飘，「你的这张脸……我总觉得，我见过。不止一次。」她松开手，摇了摇头，像要甩掉什么，「算了。这种地方，待久了，谁都会认错人。……走吧。这一次，走得比上一次，远一点。」":""),
     choices:[
@@ -724,7 +838,7 @@ Object.assign(STORY, {
 
   /* ---------- Level 2 · 猎犬 · 神智检定 ---------- */
   L2_enter:{
-    noSip:true, dep:2, level:"LEVEL 2", title:"管道梦",
+    noSip:true, timer:12, timeout:"E_hounds_swarm", meet:["hound"], dep:2, level:"LEVEL 2", title:"管道梦",
     onEnter:s=>{ s.san-=8; s.light-=10; },
     text:"你顺着铁梯一节一节往下，湿热的气浪从下方汹涌地扑上来，还没到底，衬衫就已经黏在了背上。脚终于踩到实地，你回头望了一眼——上方仓库那点昏黄的光，已经被翻涌的白色蒸汽彻底吞没了。退路，没了。\n\n这里是 LEVEL 2——〔管道梦（Pipe Dreams）〕。\n\n无数粗细不一的金属管道，在昏暗中盘绕、交错、扭结，伸向所有你能看见和看不见的方向，像一头巨兽被剖开后、永远凝固在半空的血管与内脏。有的管道滚烫，赤红色的余温从表面蒸腾，接缝处「嘶嘶」地喷着白色的蒸汽，稍一靠近就烫得皮肤发疼；有的管道冰凉，通体凝着一层细密的水珠，缓慢地汇聚、滴落，在死寂里敲出清脆而孤独的回响。脚下是湿滑的金属格栅，你每走一步，都发出一声轻微却在空旷中被无限放大的「铛」。\n\n空气又湿又热，混着铁锈、机油和某种若有若无的、腥甜的气味——后来你会知道，那是这一层的居民留下的味道。管壁上，偶尔能看见前人用粉笔或刀子留下的痕迹：有的是箭头，有的是数字，还有一处，歪歪扭扭地刻着一行字：『慢一点。它们，比你想的，更近。』\n\n你还没走出几步，就听见了那个声音。\n\n从管道深处传来的，金属爪尖刮擦地面的声音。『咔。咔。咔。』一开始只有一个，接着是两个、三个、一片。成群，由远及近，节奏错落，却又诡异地朝着同一个方向汇聚——你的方向。\n\n是『猎犬（Hounds）』。后室里最凶残、最高效的群猎者。据探险者的记录，它们的身体像被拉长、扭曲过的犬类，四肢过长，脊背嶙峋，皮肤是一种病态的灰白。而它们的眼睛，早已在无数世代的黑暗里彻底退化，成了两个凹陷的、闭合的空穴——它们是彻底的瞎子。可正因为看不见，它们的【听觉】，进化得敏锐到令人绝望：任何一点异响，一次粗重的喘息，甚至……一次失控的、擂鼓般的心跳，都会像黑暗中骤然亮起的信号弹，把整个犬群，瞬间引到你面前。M.E.G. 的档案里写着，猎犬的猎杀成功率，接近百分之百——唯一的例外，是那些能把自己变得「绝对安静」的人。\n\n你必须无声地，穿过它们。\n\n可你低头看着自己的手——它正不受控制地，剧烈地发抖。你能听见自己的心脏，正一下比一下更响地，撞击着胸腔。那声音，在你自己听来，响得像一面擂动的鼓。而你知道，在这一层，心跳声，就是催命符。",
     choices:[
@@ -858,7 +972,7 @@ Object.assign(STORY, {
     ]
   },
   L5_room:{
-    dep:5, level:"LEVEL 5", title:"恐怖酒店",
+    noSip:true, timer:10, timeout:"E_gaze", meet:["skinstealer"], dep:5, level:"LEVEL 5", title:"恐怖酒店",
     onEnter:s=>{ s.san-=12; },
     text:"你伸手，推开了那扇虚掩的客房门。\n\n房间的陈设考究得一丝不苟：铺得平整光洁、连一丝褶皱都没有的大床，擦得能照出人影的穿衣镜，衣架上，挂着一套熨帖得体、仿佛正等着主人来穿的深色西装。一切都太完美了，完美得像一个精心布置的、等待猎物走进来的舞台。\n\n你的目光，不由自主地，落在了那面穿衣镜上。\n\n镜中，映出你自己的样子——狼狈，疲惫，惊恐，衣衫褴褛。你站定，不动。\n\n可就在你静止的这一刻，镜子里的那个「你」，却慢了半拍。\n\n它的嘴角，正在一点点、一点点地，向上扯起，扬出一个诡异的、僵硬的、你从未做过、也永远不会做出的笑容。那笑容越咧越大，越咧越大，直到超出了人类面部肌肉能达到的极限，露出里面森然的、过多的牙齿。而它的眼睛，依旧空洞地、直勾勾地，「看」着镜子外面的你。\n\n与此同时，床上那套西装，动了。\n\n它没有身体，衣料却像被一双看不见的手从内部撑起，缓缓地、无声地「坐」了起来，然后「站」了起来。空荡荡的领口，直直地对准了你的脸，微微前倾，仿佛正准备把你整个人，从那个开口，缓缓地【穿上身】。\n\n这是『偷皮者（Skin-Stealer）』。后室里最令人毛骨悚然的实体之一。它没有自己的样貌，没有自己的皮囊，于是它永恒地、贪婪地，渴望着一张真正的脸，一副真正的、活人的身体。而现在，在这个精心布置的房间里，它盯上了你的。\n\n你的心脏疯狂地擂动，肾上腺素冲上头顶。你必须，立刻，做出反应——\n\n可你还剩下多少清醒，能让你分清哪个才是真正的自己，能让你的双腿听从大脑的指挥，逃出这个房间？",
     choices:[
@@ -887,7 +1001,7 @@ Object.assign(STORY, {
 
   /* ---------- Level 6 · 无光之地 · 忍住不开灯 ---------- */
   L6_enter:{
-    noSip:true, dep:6, level:"LEVEL 6", title:"无光之地",
+    noSip:true, meet:["lightfeeder"], dep:6, level:"LEVEL 6", title:"无光之地",
     onEnter:s=>{ s.san-=18; },
     text:"你迈进那片黑暗。\n\n脚下的大理石台阶，不知何时，变成了粗糙冰冷的水泥地面。而在你身后，楼梯间那最后一丝微光，也彻底地、干净地，消失了。\n\n这不是普通的暗。\n\n你在夜里关灯睡觉时经历过暗，你在停电的地下室经历过暗，可那些都不是这个。这是 LEVEL 6——〔无光之地〕，一片被绝对的、纯粹的、有实体般重量的黑暗，彻底填满的虚无。\n\n你伸出手，放在离眼睛不到一寸的地方——什么都看不见。你睁开眼，闭上眼，再睁开——没有任何区别，视野里是同一片深不见底的墨黑。你甚至开始怀疑，自己的眼睛，是不是还长在脸上，是不是已经在不知不觉中，被这黑暗溶解掉了。上，下，左，右，远，近——所有的方向，所有的概念，在这里全部失去了意义。你像一粒尘埃，悬浮在一片没有坐标的、永恒的虚空里。\n\n你想起老向导反复强调、几乎是含着某种恐惧说出的、这一层唯一的铁律：\n\n【无论多黑，多冷，多怕，绝对不能开灯。】\n\n因为这片黑暗里，游荡着某种以「光」为食的东西。它们平时茫然地、无害地漂浮着，因为在绝对的黑暗里，它们和你一样，什么都「看」不见。可只要有一束光亮起——哪怕只是一瞬，哪怕只是一颗火星——它们就会像闻到血腥的鲨鱼，从四面八方，瞬间循光而至。\n\n你的手电，就攥在手里。开关，就在你的拇指下方，触手可及。\n\n而黑暗，正以一种令人窒息的、缓慢增加的重量，从四面八方，一寸寸地，压向你。你的呼吸开始急促，冷汗浸透了后背。有一个念头，开始在你的脑海深处，疯狂地、一遍遍地尖叫起来：\n\n开灯。就一秒。就看一眼周围。求你了，就一眼，我受不了了……",
     choices:[
@@ -925,6 +1039,7 @@ Object.assign(STORY, {
     onEnter:s=>{ if(!s.flags.v7){ s.san-=8; s.light-=10; s.flags.v7=true; } },
     text:"身后那扇沉重的舱门，「哐」地合拢，转盘自动锁死。你回不去了。\n\n你站在一片湿冷的、覆满黑色藻类的礁石上，眼前展开的，是 LEVEL 7——一片没有尽头的、墨黑色的海洋。\n\n浓重的雾气，贴着水面翻涌、流动，能见度不过十几米。雾的上方，是一片毫无生气的、铅灰色的「天空」——你说不清那到底是不是天空，因为你找不到任何光源，那灰白的光，仿佛是从空气本身里，均匀地渗出来的。海水冰冷刺骨，深不见底，一层层缓慢地、永恒地、催眠般地，拍打着你脚下的礁石，发出「哗……哗……」的声音，那声音里有一种巨大的、古老的、令人心安又令人心悸的孤独。\n\n除了水，还是水。四面八方，直到雾与海连成一线、再也分不清彼此的地方。\n\n你几乎要在这片无边的死寂与孤独里，彻底绝望——就在这时，你看见了。\n\n远处的迷雾深处，一座孤零零的建筑，静静地矗立在一块突出海面的巨大礁石之上。那是探险者口中口耳相传的〔岩上之屋（The House on the Rock）〕。而它的窗户里，竟然，透出了一点温暖的、橘黄色的、家一般的灯光——在这片死寂的黑海与灰雾之间，那点光，像一个几乎令人落泪的承诺。\n\n而在更远、更淡、几乎要被浓雾完全吞没的地方，还隐约矗立着一座高塔的、模糊的轮廓。塔顶，有一束光，正一圈，一圈，极其缓慢地，扫过这片死寂的海面——那是一座灯塔。它的光每一次扫过你，都像有人在这无边的孤独里，轻轻地，看了你一眼。",
     choices:[
+      { t:"跟上那只翼上发着微光的巨蛾", go:"L7_moth", hidden:s=>s.flags.mothv },
       { t:"⟡ 探索：礁石间搁浅的那艘破船", go:"L7_explore", hidden:s=>s.flags.exp7 },
       { t:"朝着那扇亮灯的窗，游向岩上之屋", go:"E_house" },
       { t:"游向更远的那座灯塔", go:"E_lighthouse" },
@@ -933,7 +1048,7 @@ Object.assign(STORY, {
     ]
   },
   L7_dive:{
-    dep:7, level:"LEVEL 7", title:"无限海洋",
+    noSip:true, timer:10, timeout:"E_deep", dep:7, level:"LEVEL 7", title:"无限海洋",
     onEnter:s=>{ s.san-=6; },
     text:"你不甘心。\n\n岩上之屋的庇护也好，灯塔的守望也好，那都不是「回家」。那只是在后室里，找了一个更舒服的角落，住下来，然后慢慢地遗忘自己，遗忘那个还在等你回去的世界。你没有穿过猎犬、穿过黑暗、穿过冰水，只是为了在这片海上，换一个地方，安静地消失。\n\n传说里，这片无限海洋的海底，藏着通往后室更深处的暗道。而越深的地方，才有越干净、越真实的出口。\n\n你站在礁石的边缘，望着脚下那片深不见底的、墨黑色的海水。它像一张沉默的巨口。\n\n你深吸一口气——一口，两口，三口，尽可能地把肺撑满——然后，一头扎进了冰冷刺骨的黑水里。\n\n寒冷像千万根针，瞬间扎遍你的全身。你奋力向下划动，越潜越深。水温越来越低，四周的光线越来越稀薄，那点从水面渗下来的灰白，很快就被浓稠的、蓝黑色的幽暗，彻底吞没了。你的耳膜被越来越大的水压，挤压得生疼，像是随时会破裂。你的肺，开始灼烧，那点憋着的空气，正在飞快地耗尽，身体的每一个细胞都在尖叫着，命令你立刻上浮、呼吸。\n\n就在你几乎以为，这下面除了无尽的深渊、除了你即将溺毙的命运，什么都没有的时候——\n\n你看见了。\n\n在更深处，幽暗的海床上，有一道透着微光的裂隙，狭长，幽蓝，像一张微微张开的、正在低语的嘴。\n\n那就是入口。就在那里。\n\n可你的空气，也几乎，在同一时刻，耗尽了。你的意识，开始因为缺氧，而一阵阵地发白、涣散。",
     choices:[
@@ -945,7 +1060,7 @@ Object.assign(STORY, {
 
   /* ---------- Level 8 · 洞穴 · 死亡鼠 ---------- */
   L8_enter:{
-    dep:8, level:"LEVEL 8", title:"洞穴系统",
+    noSip:true, timer:12, timeout:"E_tide", meet:["deathrat"], dep:8, level:"LEVEL 8", title:"洞穴系统",
     onEnter:s=>{ if(!s.flags.v8){ s.san-=12; s.light-=15; s.flags.v8=true; } },
     text:"你从那道海底裂隙里挣扎着钻出，一股力量猛地将你向上、向前抛去——然后，你重重地跌落在一片干燥、粗粝的岩石地面上。\n\n你剧烈地咳嗽起来，把呛进肺里、灌进胃里的冰冷海水，一口一口地全吐了出来，吐得撕心裂肺，眼泪鼻涕糊了一脸。可你活着。你竟然，真的，穿过了那片无限海洋的海底。\n\n你趴在地上，大口大口地贪婪呼吸着，过了好一会儿，才勉强撑起身子，环顾四周。\n\n这里是 LEVEL 8——一片望不到尽头的、庞大的地下洞穴系统。\n\n粗粝嶙峋的岩壁，向着四面八方延伸、分岔，形成无数条幽深的甬道。头顶，倒悬着密密麻麻、大小不一的钟乳石，尖端缓慢地凝聚着水珠，一滴，一滴，坠落在下方的石笋上、水洼里，发出「嗒……嗒……」的、在空旷中被无限放大的回响。你每一次呼吸，每一次挪动，都会在这片巨大的地下空间里，激起悠远而空洞的回声，仿佛这洞穴，是一头沉睡巨兽的、正在缓缓起伏的胸腔。空气里，弥漫着一股潮湿的泥土味，和一股浓重的、动物巢穴般的腥膻气味。\n\n你打开手电，微弱的光柱扫过岩壁——然后，你的心跳漏了一拍。岩壁上，有前人用凿子、用刀、甚至用指甲，一下一下刻出来的箭头。一个，接着一个，排成一列，固执地指向洞穴更深、更黑的地方，仿佛在指引一条，通往更下层的、唯一的生路。\n\n可就在这时，那股腥膻味的源头，从黑暗的深处，传来了声音——\n\n【无数细小的爪子，疯狂刨挖岩石的声音。】\n\n密集，急促，铺天盖地，像一场骤然降临的暴雨，正在以惊人的速度，向你逼近。你知道那是什么。那是『死亡鼠（Death Rats）』的鼠群——一种能在几秒钟内，把一头活牛、一个活人，啃食成一具白森森骨架的、后室里最贪婪的清道夫。",
     choices:[
@@ -969,7 +1084,7 @@ Object.assign(STORY, {
 
   /* ---------- Level Fun（Level 0 跟随无脸人的岔路）---------- */
   LFUN_enter:{
-    dep:5, level:"LEVEL =", title:"Level Fun",
+    noSip:true, timer:10, timeout:"E_party_begins", meet:["partygoer"], dep:5, level:"LEVEL =", title:"Level Fun",
     onEnter:s=>{ s.san-=28; },
     text:"你深吸一口气，整个人，走进了那面墙里。\n\n穿过墙壁的那一瞬间，一阵刺耳到严重失真的、欢快的马戏团音乐，「轰」地一声，在你四周炸开，震得你耳膜生疼，几乎要当场跪倒。\n\n等你踉跄着站稳，眼前的景象，让你的血液再次冻结。\n\n满眼，是褪了色的、瘪塌的彩色气球，成百上千个，挂满了墙壁和天花板。吱呀作响、缓慢空转的旋转木马，木马的脸上，笑容诡异而僵硬。堆成小山一样的、五彩的派对彩带和拉花，早已蒙尘。桌上，摆着一个个插着蜡烛、却早已发霉长毛、渗出黑色黏液的生日蛋糕。而墙上、天花板上、地板上、每一寸空间里，都贴满了一张张——咧到极限的、僵硬的、纸片剪成的笑脸。\n\n这里，是后室里臭名昭著的 LEVEL 【=】——〔Level Fun〕。一场永远不会散场的、盛大的、恐怖的生日派对。\n\n一群『派对客（Partygoers）』，缓缓地，转过头，「看」向了你。\n\n它们穿着华丽而陈旧的、上个世纪款式的礼服和裙装，戴着尖尖的派对帽。而它们每一张脸上，都挂着一个——永远无法停下、向两侧扯到面颊撕裂边缘、露出过多牙齿的，扭曲到极致的笑容。那笑容里没有一丝喜悦，只有一种被强行固定的、痛苦的、疯狂的欢乐。\n\n它们看见你，缓缓地，朝你张开了双臂，用一种黏腻的、拖长的、严重走调的合唱，「欢迎」你的到来：\n\n「欢迎——加入我们——永远的——派对——！永远——不散场——！」",
     choices:[
@@ -978,7 +1093,7 @@ Object.assign(STORY, {
     ]
   },
   LRUN_enter:{
-    dep:6, level:"LEVEL !", title:"Run For Your Life",
+    noSip:true, timer:8, timeout:"E_stopped", meet:["chaser"], dep:6, level:"LEVEL !", title:"Run For Your Life",
     onEnter:s=>{ s.san-=15; },
     text:"你发出一声不受控制的尖叫，用尽全力，撞开面前那些张着手臂的『派对客』，头也不回地，一头栽进了一条突然出现在墙壁裂缝后的、灯光疯狂闪烁的、血红色的走廊。\n\n这里是 LEVEL !——探险者们叫它「Run For Your Life」（为你的生命奔跑）。一条仿佛，只为「逃命」这一件唯一的事，而存在的层。\n\n走廊的墙壁上，用各种颜色、各种字迹，潦草而疯狂地写满了标语，在闪烁的红光里，一条接一条地，刺进你的眼睛，砸进你的脑子：\n\n【RUN】【别回头】【它们来了】【快跑】【不要停】【别回头！！！】【已经晚了】\n\n身后，无数杂乱的脚步声、金属爪尖的刮擦声，还有那永不停歇的、越来越近的、癫狂的笑声，汇成了一股黑色的、粘稠的、正在疯狂【逼近】的洪流。你能感觉到那股寒气，正贴着你的后背，一寸寸地追上来。\n\n你的肺，像要炸开，每一次呼吸都撕扯着喉咙。你的双腿，早已超越了极限，却因为纯粹的恐惧，而不敢有一丝一毫的停顿。你只是跑，跑，拼了命地跑，跑向那条永远看不到尽头的红色走廊的深处。\n\n然后，走廊在前方，猛地，一分为二。\n\n一条，通向左边，那里，似乎有一片更明亮的光。\n\n一条，通向右边，那是一道黑暗的、狭窄的缝隙。\n\n你只有一瞬间，一瞬间可以做出选择。身后的洪流，已经近在咫尺。",
     choices:[
@@ -1218,10 +1333,82 @@ Object.assign(STORY, {
   },
 });
 
+Object.assign(STORY, {
+  E_hounds_swarm:{ ending:true, code:"E25", name:"循声而至", tone:"bad",
+    text:"你僵在原地，太久了。\n\n你在恐惧和犹豫之间摇摆，迟迟迈不出那一步。而你忘了最要命的一件事——在这一层，【安静】从来不等于【安全】。因为有一个声音，你永远压不住：\n\n你自己的，心跳。\n\n它在你的胸腔里，一下，比一下，更响。擂鼓一样。而黑暗中那些瞎眼的头颅，一颗接一颗地，缓缓转向了你的方向——它们「听见」你了。它们一直在听。\n\n爪声，从四面八方，同时炸开。\n\n你甚至来不及选择往哪里逃。黑暗里扑来的第一具躯体，就撞碎了你所有的犹豫。这一层的猎手们，用一顿最快的晚餐，给所有后来者留下了一条用你的名字写成的教训：\n\n在管道梦，犹豫的人，连犹豫本身的声音，都会出卖他。" },
+  E_gaze:{ ending:true, code:"E26", name:"对视", tone:"bad",
+    text:"你和镜子里那个笑，对视了太久。\n\n你告诉自己，只是在观察，只是在想对策。可是每多看一秒，那个笑就更深一分，而你挪开视线的力气，就少一分。它的眼睛——你的眼睛——像两口深井，你在井沿上探着头，一寸，一寸地，倾斜。\n\n你没有注意到，床上那套西装，是什么时候不见的。\n\n你也没有注意到，你的身后，是什么时候站了一个「人」的。\n\n当那个空荡荡的领口，从背后，轻轻罩下来的时候，你甚至没有挣扎——因为在镜子里，你看见的分明是：你自己，抬起手，为自己，穿上了一件熨帖的、合身的西装。\n\n镜中的你，笑得很满意。\n\n镜外的「你」，也是。" },
+  E_stopped:{ ending:true, code:"E27", name:"停下的人", tone:"bad",
+    text:"岔路在眼前，左边，右边——你的大脑一片空白，你的脚步，慢了下来。\n\n只慢了半秒。\n\n可这条走廊的规则，从墙上第一条标语开始，就写得清清楚楚，没有一个字是修辞，没有一个字是吓唬人：\n\n【RUN】。跑。不许想。不许选。不许停。\n\n身后那股黑色的洪流，在你迟疑的这半秒里，追平了你用命换来的全部距离。冰凉的东西缠上你的脚踝时，你正好看清了头顶最后一条标语，它闪了两下，像一声叹息：\n\n【已经晚了】\n\n在名为「为你的生命奔跑」的这一层，被淘汰的从来不是跑得最慢的人——是最先开始思考的那一个。" },
+  E_tide:{ ending:true, code:"E28", name:"黑潮", tone:"bad",
+    text:"爪挖岩石的声浪，越来越近，越来越密——而你，还站在原地，权衡着哪一条路，才是对的。\n\n洞穴不给你权衡的时间。\n\n当第一只死亡鼠从黑暗的边缘涌出时，你终于动了——可太迟了。黑潮转瞬漫过你的脚背、小腿、腰际，温热的、攒动的、密不透风。你手里的手电还亮着，光柱在翻涌的鼠群上扫出一片徒劳的白——光能吓退它们，前提是，你得在它们围拢之前，就举着光，跑起来。\n\n站在原地的光，不是武器。只是餐桌上的一根蜡烛。\n\n洞穴很快恢复了寂静。你的手电躺在岩石上，还亮着，照着一小片空无一人的地面，像一场迟到的、没有观众的悼念。" },
+  E_party_begins:{ ending:true, code:"E29", name:"入席", tone:"bad",
+    text:"它们朝你张开手臂的时候，你僵住了。\n\n笑，还是跑？你的脸和你的腿，同时死机了。而『派对客』们，把你的静止，理解成了一种,含羞的,默许。\n\n它们围了上来。冰凉的、僵硬的手，友善地搭上你的肩，你的背，你的手腕。走调的合唱在你耳边越唱越近，越唱越柔：「不要怕——不要怕——派对——才刚刚——开始——」\n\n有「人」为你戴上了尖尖的纸帽。有「人」把一块渗着黑色黏液的蛋糕，递到你的嘴边。蜡烛，一根一根地，点亮了。\n\n它们唱起了生日歌。\n\n是唱给你的。今天是你的生日——从今往后，每一天，都是你的生日。你的嘴角，在一双双手温柔的按压下，缓缓地，向两边，咧了开来。\n\n派对，永不散场。现在，你是主角了。" },
+});
+
+Object.assign(STORY, {
+  L0_event:{ redirect:s=> getRuns()<=1 ? "L0_face" : ["L0_face","L0_trader","L0_raider"][hashStr(String(s.seed)+"|l0ev")%3] },
+
+  L0_trader:{
+    meet:["trader"], dep:0, level:"LEVEL 0", title:"大厅",
+    text:"声音的源头，拐过墙角，出现在门框里——不是实体。\n\n是一辆锈迹斑斑的超市购物车，车里堆满了瓶瓶罐罐、电池、绳索和贴着各色标签的罐头。推车的，是一个活生生的人：胡子花白，身上套着好几层不合身的外套，一双眼睛却亮得惊人，像两粒在灰烬里没熄的火星。\n\n他先开了口，声音沙哑却轻快：「新掉下来的？看你那脸色就知道。别紧张，我不抢——我做买卖。」\n\n他自称「商人」，说自己在浅层这几片跑了很多年，闭着眼都认得路。「下面的层我都熟。要换点什么吗？公道价，童叟无欺。」他拍拍车里的存货，压低声音补了一句：「在这地方，一节电池，有时候比一条命还值钱。」\n\n你忍不住问他，为什么不找出口回家。\n\n他咧嘴一笑，露出缺了一颗的门牙：「回去干嘛？挤地铁？还房贷？开不完的会？」他摆摆手，推着车往前挪了半步，「这儿多清静。——当然，你想回，我祝你走运。真心的。」",
+    choices:[
+      { t:"用一瓶杏仁水，换他车上的电池组", go:"L0_trade1", req:s=>s.water>0, note:"你拿不出他要的东西", cost:"耗1瓶 · 手电+50%" },
+      { t:"不做交易，向他打听下面的路", go:"L0_trade2" },
+      { t:"道谢告辞，继续赶路", go:"L0_fork" }
+    ]
+  },
+  L0_trade1:{
+    dep:0, level:"LEVEL 0", title:"大厅",
+    onEnter:s=>{ s.water--; s.light=Math.min(100,s.light+50); },
+    text:"他接过杏仁水，对着头顶的灯管眯眼看了看成色，满意地点点头，从车底翻出一组用胶带缠好的电池，推到你手里。\n\n「好货。下面第三层，黑得吃人，这个省着用。」\n\n你给手电换上新电池，光柱「唰」地重新变得雪亮。你转身要走时，他忽然在背后补了一句，语气头一次沉了下来：\n\n「小心点。要是在下面，碰到一个拎着铁管、张口就管你要水的疯子——跑。别跟他讲道理，也别信他说的任何一个字。他以前……也是个买卖人。」",
+    choices:[ { t:"记下这个警告，继续赶路", go:"L0_fork" } ]
+  },
+  L0_trade2:{
+    dep:0, level:"LEVEL 0", title:"大厅",
+    onEnter:s=>{ s.san+=8; },
+    text:"他倒也不恼，靠在购物车上，掰着手指头给你比划：\n\n「第二层，猎犬，瞎的，全靠耳朵——贴着冷水管走，它们怕烫，不往那边去。第四层有个回家的门，按打印机，记住是【三台】，多一台都不行。第六层……」他顿了顿，脸上的笑淡了下去，「第六层，别开灯。就这三个字，别开灯。」\n\n你把这些一条条记进脑子里。临走时，他又叫住你，声音压得极低：\n\n「还有个事儿，信不信由你。最深处那扇门，只认一种人——心里还装着『家』的人。」他敲了敲自己的胸口，「空着手、空着心下去的，都白死了。要带点什么下去。什么都行，只要它能让你想起来，你为什么要回去。」",
+    choices:[ { t:"谢过他，继续赶路", go:"L0_fork" } ]
+  },
+
+  L0_raider:{
+    meet:["raider"], dep:0, level:"LEVEL 0", title:"大厅",
+    text:"拖拽声，戛然而止。\n\n你还没反应过来这意味着什么，一条人影就从侧面的门框后闪了出来，快得不像话——那声音是故意弄出来的。是【诱饵】。\n\n那是个人。胡子拉碴，眼窝深陷，手里攥着一截一头磨尖了的铁管，铁管上有些你不想细看的暗色痕迹。他的眼神像一条饿了很久的狗，上下打量着你，和你的背包。\n\n「水。」他只说了一个字，嗓子哑得像砂纸，「把水，交出来。」\n\n他一步，一步地逼近，铁管在昏黄的灯光下泛着冷光。你意识到，眼前这个东西，比这一层任何实体都难缠——因为他曾经也是个想回家的普通人。他知道你在想什么，知道你的包里可能有什么，更知道，你在怕什么。",
+    choices:[
+      { t:"把一瓶杏仁水丢过去，趁机脱身", go:"L0_raid_pay", req:s=>s.water>0, note:"你的包里已经没有他要的东西了", cost:"耗1瓶" },
+      { t:"盯住他的眼睛，寸步不让", go:"L0_raid_face", req:s=>s.san>=50, note:"你眼里的恐惧藏不住——吓不退任何人", cost:"需神智≥50" },
+      { t:"转身就跑，赌他不敢深追", go:"L0_raid_run", cost:"有代价" }
+    ]
+  },
+  L0_raid_pay:{
+    dep:0, level:"LEVEL 0", title:"大厅",
+    onEnter:s=>{ s.water--; },
+    text:"你缓缓从包里摸出一瓶杏仁水，扬手，朝他左侧抛了过去。\n\n他的眼睛瞬间被那道琥珀色的弧线钉住，单手去接——就在他视线离开你的那半秒，你已经悄无声息地退进了另一间房，再一间，再一间。\n\n背后远远传来他的声音，含混不清，像是含着瓶口：「……识相。」\n\n你没有停下。一瓶水买一条路，在后室，这笔账不算亏。只是你比刚才更清楚了一件事：在这下面，需要提防的，从来不只是怪物。",
+    choices:[ { t:"绕远路，回到岔路口", go:"L0_fork" } ]
+  },
+  L0_raid_face:{
+    dep:0, level:"LEVEL 0", title:"大厅",
+    onEnter:s=>{ s.san-=5; },
+    text:"你没有退。\n\n你迎着他的目光，站在原地，一动不动。心脏在胸腔里擂鼓，可你把那阵鼓声，死死地摁在了脸皮底下——你的脸上，什么都没有。没有恐惧，没有哀求，甚至没有愤怒。只有一种近乎麻木的、深不见底的平静。\n\n逼近的脚步，慢了下来。\n\n在这个鬼地方活下来的人，都有一套自己的生存直觉。而他的直觉此刻正在对他尖叫：不对劲。怕铁管的人会退，会抖，会讨饶——不怕的，要么是疯子，要么，是比他见过的任何东西都更不好惹的什么。\n\n疯子不怕疯子。但疯子，怕更稳的疯子。\n\n他盯着你看了足足十几秒，最终，往地上啐了一口，骂了句什么，倒退着，消失在了房间的阴影里。\n\n你一直站到他的脚步声彻底消失，才发现自己的后背，早已被冷汗浸透。",
+    choices:[ { t:"平复呼吸，回到岔路口", go:"L0_fork" } ]
+  },
+  L0_raid_run:{
+    dep:0, level:"LEVEL 0", title:"大厅",
+    onEnter:s=>{ s.san-=10; s.light-=12; },
+    text:"你转身就跑。\n\n身后立刻炸开一声怒骂，脚步声紧追而来。你在一模一样的黄色房间里没命地穿行，左拐，右拐，再左拐——每一个门框都长得一样，每一面墙都在嘲笑你的方向感。追赶的脚步声在空旷的房间里四处反弹，一会儿在身后，一会儿竟像是在侧面。\n\n慌乱中，你的手电狠狠磕在一处墙角上，「啪」地闪了几下，光柱肉眼可见地暗了一截。你顾不上心疼，抓着它继续跑。\n\n不知拐过了多少个弯，身后终于彻底安静了。你扶着墙，弯着腰，肺像破了的风箱。\n\n他没有深追。在这一层，追人太远的人，自己也会变成猎物——他比你更懂这个道理。\n\n你检查了一下磕坏的手电。还能用。只是那道光，比刚才，虚了一些。",
+    choices:[ { t:"确认甩掉了他，回到岔路口", go:"L0_fork" } ]
+  },
+
+  L7_moth:{
+    meet:["moth"], dep:7, level:"LEVEL 7", title:"无限海洋",
+    onEnter:s=>{ s.flags.mothv=true; s.san+=10; s.water+=1; },
+    text:"你注意到它很久了——一只手掌大的飞蛾，安静地停在不远处的礁石上。它的双翼上，流转着一层淡金色的微光，在这片铅灰的雾海里，像两片会呼吸的、小小的灯。\n\n它没有躲你。相反，当你望向它时，它振翅飞起，向前飞出几步，又停下，回过头来——它在【等你】。\n\n鬼使神差地，你跟了上去。\n\n它领着你，绕过一道道湿滑的礁缝，避开几处你自己绝不会注意到的、深不见底的裂隙，最终停在一处背风的凹岩前。凹岩深处，静静躺着一个防水包——某位遇难者的遗物。里面有一瓶密封完好的〔杏仁水〕，和半块用油纸包着的、居然还没坏的干粮。\n\n你狼吞虎咽地吃完，转头看它。它停在岩石上，轻轻地、缓慢地，扇着那两片发光的翅膀，像是在道别。然后，它振翅而起，朝着灯塔的方向，飞进浓雾深处，那点微光一闪，一闪，最后融进了灯塔扫过的光柱里。\n\n你在原地站了很久。\n\n后室并非只有獠牙与黑暗。偶尔，也有这样一点，不求任何回报的微光。而正是这样的时刻，让你重新想起了那个几乎要忘掉的词：【活下去】。",
+    choices:[ { t:"回到礁石高处", go:"L7_enter" } ]
+  },
+});
+
 refreshProgress();
 showMenu();
 </script>
 </body>
 </html>
-
-
